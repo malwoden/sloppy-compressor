@@ -1,11 +1,10 @@
-use hex;
-use md5;
 use serde::{Deserialize, Serialize};
-use std::env;
+use std::{collections::hash_map::Entry, env};
 use std::fs::File;
 use std::io;
 use std::io::prelude::*;
 use std::{collections::HashMap, io::BufReader};
+
 
 const BLOCK_SIZE: usize = 128;
 
@@ -23,7 +22,7 @@ struct Compressed {
 /// To decompress - `./sloppy-compressor decompress ~/file/path.scomp`
 ///
 /// The program ignores most error checking and will overwrite files without warning.
-fn main() -> () {
+fn main() {
     let args: Vec<String> = env::args().collect();
     let compress_mode = &args[1] == "compress";
     let path = &args[2];
@@ -55,20 +54,20 @@ fn compress(file_path: &str) -> io::Result<()> {
         let b = &buffer[..n];
         let strong = strong_hash(b);
 
-        if block_hashes.contains_key(&strong) {
-            let index = block_hashes.get(&strong).unwrap();
-            block_map.push(*index);
-        } else {
-            blocks.push(b.to_vec());
-            let new_block_index = (blocks.len() - 1) as u32;
-            block_hashes.insert(strong, new_block_index);
-            block_map.push(new_block_index);
-        }
+        match block_hashes.entry(strong) {
+            Entry::Occupied(entry) => block_map.push(*entry.get()),
+            Entry::Vacant(entry) => {
+                blocks.push(b.to_vec());
+                let new_block_index = (blocks.len() - 1) as u32;
+                entry.insert(new_block_index);
+                block_map.push(new_block_index);
+            }
+        };
     }
 
     let compressed = Compressed {
         block_map,
-        blocks: blocks,
+        blocks,
     };
 
     write_compressed(&compressed, file_path)
