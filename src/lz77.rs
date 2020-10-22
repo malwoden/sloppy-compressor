@@ -41,6 +41,31 @@ mod tests {
         ];
         assert_eq!(expected, build_lz77_node_list(&bytes));
     }
+
+    #[test]
+    fn build_lz77_node_list_test_no_trailing_chars() {
+        let bytes = vec![b'a', b'b', b'a', b'b']; // D:
+
+        // (0,0,a), (0,0,b), (2,1,b)
+        let expected: Vec<Node> = vec![
+            Node {
+                offset: 0,
+                length: 0,
+                char: b'a',
+            },
+            Node {
+                offset: 0,
+                length: 0,
+                char: b'b',
+            },
+            Node {
+                offset: 2,
+                length: 1,
+                char: b'b',
+            },
+        ];
+        assert_eq!(expected, build_lz77_node_list(&bytes));
+    }
 }
 #[derive(PartialEq, Debug)]
 struct Node {
@@ -64,7 +89,6 @@ fn build_lz77_node_list(to_compress: &[u8]) -> Vec<Node> {
 
     println!("{:?}", to_compress);
     loop {
-        // byte ptr
         let c = to_compress[byte_ptr];
         let search_slice_start_index = byte_ptr.saturating_sub(search_window_size);
         let search_slice_end_index = byte_ptr;
@@ -110,11 +134,20 @@ fn calculate_node(c: u8, left_slice: &[u8], right_slice: &[u8]) -> Node {
         }
     }
 
-    let next_char = if offset == 0 {
-        c
+    let next_char;
+    if length == 0 {
+        // offset and length are 0 - this is a char literal node
+        next_char = c;
     } else {
-        right_slice[length - 1]
-    }; // fail when no more chars?
+        if length > right_slice.len() {
+            // we always need to have a char in the Node, but if we find a match up to the end of the
+            // right slice, we have no 'next' char to set. So we shorten the matched pattern by 1 char
+            // and set that final char as the next char for this node
+            length -= 1;
+        }
+
+        next_char = right_slice[length - 1]
+    }
 
     Node {
         offset,

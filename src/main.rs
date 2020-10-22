@@ -1,12 +1,11 @@
 mod lz77;
 
 use serde::{Deserialize, Serialize};
-use std::{collections::hash_map::Entry, env};
 use std::fs::File;
 use std::io;
 use std::io::prelude::*;
+use std::{collections::hash_map::Entry, env};
 use std::{collections::HashMap, io::BufReader};
-
 
 const BLOCK_SIZE: usize = 128;
 
@@ -67,10 +66,7 @@ fn compress(file_path: &str) -> io::Result<()> {
         };
     }
 
-    let compressed = Compressed {
-        block_map,
-        blocks,
-    };
+    let compressed = Compressed { block_map, blocks };
 
     write_compressed(&compressed, file_path)
 }
