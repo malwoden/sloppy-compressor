@@ -78,16 +78,19 @@ pub fn compress(file: &mut File) {
     let mut file_bytes = Vec::new();
     file.read_to_end(&mut file_bytes)
         .expect("Error on file read");
+
+    let nodes = build_lz77_node_list(&file_bytes);
+    println!("Compression Nodes: {:?}", nodes.len());
+    println!("Last Nodes: {:?}", &nodes[nodes.len() - 20..]);
 }
 
 fn build_lz77_node_list(to_compress: &[u8]) -> Vec<Node> {
-    let search_window_size = 32;
-    let prefix_window_size = 32;
+    let search_window_size = 4096;
+    let prefix_window_size = 4096;
 
     let mut byte_ptr = 0;
     let mut lz77_nodes = vec![];
 
-    println!("{:?}", to_compress);
     loop {
         let c = to_compress[byte_ptr];
         let search_slice_start_index = byte_ptr.saturating_sub(search_window_size);
@@ -101,13 +104,8 @@ fn build_lz77_node_list(to_compress: &[u8]) -> Vec<Node> {
 
         let search_slice = &to_compress[search_slice_start_index..search_slice_end_index];
         let prefix_slice = &to_compress[prefix_slice_start_index..prefix_slice_end_index];
-        println!(
-            "search slice: {:?}, byte: {:?}, prefix_slice: {:?}",
-            search_slice, c, prefix_slice,
-        );
 
         let node = calculate_node(c, search_slice, prefix_slice);
-        println!("Node: {:?}", node);
         byte_ptr += 1 + node.length; // advance the byte pointer 1 past the position of char literal in the node
         lz77_nodes.push(node);
 
@@ -126,7 +124,6 @@ fn calculate_node(c: u8, left_slice: &[u8], right_slice: &[u8]) -> Node {
     for i in (0..left_slice.len()).rev() {
         if c == left_slice[i] {
             let series_match = find_length_of_series_match(&left_slice[i + 1..], right_slice);
-            println!("series match: {:?}", series_match);
             if series_match > length {
                 offset = left_slice.len() - i;
                 length = series_match + 1; // + 1 to include the 'c' char
