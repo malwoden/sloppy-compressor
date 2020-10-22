@@ -1,3 +1,5 @@
+mod lz77;
+
 use serde::{Deserialize, Serialize};
 use std::{collections::hash_map::Entry, env};
 use std::fs::File;
