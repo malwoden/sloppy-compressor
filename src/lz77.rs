@@ -1,4 +1,4 @@
-use std::io::prelude::*;
+use std::io::{prelude::*, BufWriter};
 use std::{cmp, fs::File};
 
 #[cfg(test)]
@@ -39,7 +39,12 @@ mod tests {
                 char: b'a',
             },
         ];
-        assert_eq!(expected, build_lz77_node_list(&bytes));
+        let nodes = build_lz77_node_list(&bytes);
+        assert_eq!(expected, nodes);
+
+        let mut write_vec: Vec<u8> = Vec::new();
+        decompress(nodes, &mut write_vec, 4096);
+        assert_eq!(write_vec, bytes);
     }
 
     #[test]
@@ -64,7 +69,19 @@ mod tests {
                 char: b'b',
             },
         ];
-        assert_eq!(expected, build_lz77_node_list(&bytes));
+        let nodes = build_lz77_node_list(&bytes);
+        assert_eq!(expected, nodes);
+    }
+
+    #[test]
+    fn windowing_buffer() {
+        let mut search_buffer: WindowByteContainer<u8> = WindowByteContainer::new(4);
+        search_buffer.push(b'a');
+        search_buffer.push_all(&[b'b', b'c', b'd', b'e']);
+
+        assert_eq!(search_buffer.vec, vec![b'b', b'c', b'd', b'e']);
+        search_buffer.push(b'z');
+        assert_eq!(search_buffer.vec, vec![b'c', b'd', b'e', b'z']);
     }
 }
 #[derive(PartialEq, Debug)]
@@ -74,6 +91,9 @@ struct Node {
     char: u8,
 }
 
+const SEARCH_WINDOW_SIZE: usize = 4096;
+const PREFIX_WINDOW_SIZE: usize = 4096;
+
 pub fn compress(file: &mut File) {
     let mut file_bytes = Vec::new();
     file.read_to_end(&mut file_bytes)
@@ -82,23 +102,25 @@ pub fn compress(file: &mut File) {
     let nodes = build_lz77_node_list(&file_bytes);
     println!("Compression Nodes: {:?}", nodes.len());
     println!("Last Nodes: {:?}", &nodes[nodes.len() - 20..]);
+
+    println!(
+        "{:?}",
+        nodes.iter().fold(0, |acc, x| cmp::max(x.length, acc))
+    );
 }
 
 fn build_lz77_node_list(to_compress: &[u8]) -> Vec<Node> {
-    let search_window_size = 4096;
-    let prefix_window_size = 4096;
-
     let mut byte_ptr = 0;
     let mut lz77_nodes = vec![];
 
     loop {
         let c = to_compress[byte_ptr];
-        let search_slice_start_index = byte_ptr.saturating_sub(search_window_size);
+        let search_slice_start_index = byte_ptr.saturating_sub(SEARCH_WINDOW_SIZE);
         let search_slice_end_index = byte_ptr;
 
         let prefix_slice_start_index = byte_ptr + 1;
         let prefix_slice_end_index = cmp::min(
-            byte_ptr.saturating_add(prefix_window_size),
+            byte_ptr.saturating_add(PREFIX_WINDOW_SIZE),
             to_compress.len(),
         );
 
@@ -163,4 +185,54 @@ fn find_length_of_series_match(left: &[u8], right: &[u8]) -> usize {
     max_count
 }
 
-// pub fn decompress(file: File) -> () {}
+// need to keep the search window in memory, which means the length of it needs to be serialised.
+fn decompress<W: Write>(nodes: Vec<Node>, writer: &mut W, search_window_size: usize) {
+    let mut search_buffer: WindowByteContainer<u8> = WindowByteContainer::new(search_window_size);
+    let mut buffered_writer = BufWriter::new(writer);
+
+    for node in nodes {
+        let mut bytes_to_write = Vec::new();
+        if node.length > 0 {
+            // copy from the search buffer
+            let search_start_index = search_buffer.vec.len() - node.offset;
+            let b = &search_buffer.vec[search_start_index..search_start_index + node.length];
+            bytes_to_write.extend(b.iter());
+        }
+        bytes_to_write.push(node.char);
+        buffered_writer
+            .write_all(&bytes_to_write)
+            .expect("Error during decompression");
+
+        search_buffer.push_all(&bytes_to_write);
+    }
+}
+
+/// A fixed sized container that pops old elements as new ones arrive
+#[derive(PartialEq, Debug)]
+struct WindowByteContainer<T> {
+    pub vec: Vec<T>, // maybe VecDeque would be a better container
+    limit: usize,
+}
+
+impl<T: std::clone::Clone> WindowByteContainer<T> {
+    fn new(limit: usize) -> WindowByteContainer<T> {
+        WindowByteContainer {
+            vec: Vec::new(),
+            limit,
+        }
+    }
+
+    fn push(&mut self, element: T) {
+        if self.vec.len() == self.limit {
+            self.vec.remove(0);
+        }
+        self.vec.push(element)
+    }
+
+    fn push_all(&mut self, elements: &[T]) {
+        while self.vec.len() + elements.len() > self.limit {
+            self.vec.remove(0); // really not efficient.
+        }
+        self.vec.extend_from_slice(elements);
+    }
+}
