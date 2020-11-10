@@ -39,7 +39,8 @@ mod tests {
                 char: b'a',
             },
         ];
-        let nodes = build_lz77_node_list(&bytes);
+        let mut nodes = Vec::new();
+        build_lz77_node_list(&bytes, |node| nodes.push(node));
         assert_eq!(expected, nodes);
 
         let mut write_vec: Vec<u8> = Vec::new();
@@ -69,7 +70,8 @@ mod tests {
                 char: b'b',
             },
         ];
-        let nodes = build_lz77_node_list(&bytes);
+        let mut nodes = Vec::new();
+        build_lz77_node_list(&bytes, |node| nodes.push(node));
         assert_eq!(expected, nodes);
     }
 
@@ -99,7 +101,8 @@ pub fn compress(file: &mut File) {
     file.read_to_end(&mut file_bytes)
         .expect("Error on file read");
 
-    let nodes = build_lz77_node_list(&file_bytes);
+    let mut nodes = Vec::new();
+    build_lz77_node_list(&file_bytes, |node| nodes.push(node));
     println!("Compression Nodes: {:?}", nodes.len());
     println!("Last Nodes: {:?}", &nodes[nodes.len() - 20..]);
 
@@ -109,9 +112,11 @@ pub fn compress(file: &mut File) {
     );
 }
 
-fn build_lz77_node_list(to_compress: &[u8]) -> Vec<Node> {
+fn build_lz77_node_list<C>(to_compress: &[u8], mut callback: C)
+where
+    C: FnMut(Node),
+{
     let mut byte_ptr = 0;
-    let mut lz77_nodes = vec![];
 
     loop {
         let c = to_compress[byte_ptr];
@@ -129,14 +134,13 @@ fn build_lz77_node_list(to_compress: &[u8]) -> Vec<Node> {
 
         let node = calculate_node(c, search_slice, prefix_slice);
         byte_ptr += 1 + node.length; // advance the byte pointer 1 past the position of char literal in the node
-        lz77_nodes.push(node);
+
+        callback(node);
 
         if byte_ptr > to_compress.len() - 1 {
             break;
         }
     }
-
-    lz77_nodes
 }
 
 fn calculate_node(c: u8, left_slice: &[u8], right_slice: &[u8]) -> Node {
