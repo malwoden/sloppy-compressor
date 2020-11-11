@@ -5,21 +5,42 @@ mod block_compress;
 mod compression;
 mod lz77;
 
+enum CompressionAlgorithm {
+    Block,
+    Lz77,
+}
+
+impl CompressionAlgorithm {
+    fn create(&self) -> Box<dyn Algorithm> {
+        match *self {
+            CompressionAlgorithm::Block => Box::new(block_compress::BlockCompression {}),
+            CompressionAlgorithm::Lz77 => Box::new(lz77::Lz77Compression {}),
+        }
+    }
+}
+
 /// a really rubbish file compressor.
 ///
-/// Compress: `./sloppy-compressor compress ~/file/input.name ~/file/output.name`
+/// Compress: `./sloppy-compressor lz77 compress ~/file/input.name ~/file/output.name`
 ///
-/// To decompress - `./sloppy-compressor decompress ~/file/input.name ~/file/output.name`
+/// To decompress - `./sloppy-compressor lz77 decompress ~/file/input.name ~/file/output.name`
 ///
 /// The program ignores most error checking and will overwrite files without warning.
 fn main() -> io::Result<()> {
     let args: Vec<String> = env::args().collect();
-    let compress_mode = &args[1] == "compress";
-    let path = &args[2];
-    let output_path = &args[3];
+    let algo = &args[1];
+    let compress_mode = &args[2] == "compress";
+    let path = &args[3];
+    let output_path = &args[4];
     println!("{:?}", args);
 
-    let compressor = block_compress::BlockCompression {};
+    let algorithm = match algo.as_str() {
+        "block" => CompressionAlgorithm::Block,
+        "lz77" => CompressionAlgorithm::Lz77,
+        _ => panic!("Unknown compression algorithm"),
+    };
+    let compressor = algorithm.create();
+
     let file = File::open(path)?;
 
     if compress_mode {
