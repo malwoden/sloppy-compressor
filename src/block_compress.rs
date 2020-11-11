@@ -9,6 +9,12 @@ use super::compression;
 
 const BLOCK_SIZE: usize = 128;
 
+#[derive(Serialize, Deserialize, Debug)]
+struct Compressed {
+  block_map: Vec<u32>,
+  blocks: Vec<Vec<u8>>,
+}
+
 pub struct BlockCompression {}
 
 /// Compresses a file by looking for matching block patterns.block_compress
@@ -45,7 +51,7 @@ impl compression::Algorithm for BlockCompression {
       };
     }
     let compressed = Compressed { block_map, blocks };
-    write_compressed(&compressed, output_file_path)
+    compression::write_compressed(&compressed, output_file_path)
   }
 
   fn decompress(&self, compressed_file: File, output_file_path: &str) -> io::Result<()> {
@@ -58,22 +64,6 @@ impl compression::Algorithm for BlockCompression {
     }
     Ok(())
   }
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct Compressed {
-  block_map: Vec<u32>,
-  blocks: Vec<Vec<u8>>,
-}
-
-fn write_compressed(compressed: &Compressed, output_file_path: &str) -> io::Result<()> {
-  let encoded = bincode::serialize(&compressed).unwrap();
-
-  let mut out_file = File::create(output_file_path)?;
-  out_file.write_all(&encoded)?;
-
-  println!("Compressed Size: {}", encoded.len());
-  Ok(())
 }
 
 fn strong_hash(buf: &[u8]) -> String {

@@ -1,4 +1,5 @@
-use std::io::{self, prelude::*, BufWriter};
+use serde::{Deserialize, Serialize};
+use std::io::{self, prelude::*, BufReader, BufWriter};
 use std::{cmp, fs::File};
 
 use super::compression;
@@ -46,7 +47,7 @@ mod tests {
         assert_eq!(expected, nodes);
 
         let mut write_vec: Vec<u8> = Vec::new();
-        decompress(nodes, &mut write_vec, 4096);
+        decompress_nodes(nodes, &mut write_vec, 4096);
         assert_eq!(write_vec, bytes);
     }
 
@@ -88,7 +89,7 @@ mod tests {
         assert_eq!(search_buffer.vec, vec![b'c', b'd', b'e', b'z']);
     }
 }
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Serialize, Deserialize)]
 struct Node {
     offset: usize,
     length: usize,
@@ -97,6 +98,12 @@ struct Node {
 
 const SEARCH_WINDOW_SIZE: usize = 4096;
 const PREFIX_WINDOW_SIZE: usize = 4096;
+
+#[derive(Serialize, Deserialize, Debug)]
+struct Compressed {
+    search_window_size: usize,
+    nodes: Vec<Node>,
+}
 
 pub struct Lz77Compression {}
 
@@ -110,15 +117,22 @@ impl compression::Algorithm for Lz77Compression {
         build_lz77_node_list(&file_bytes, |node| nodes.push(node));
         println!("Compression Nodes: {:?}", nodes.len());
         println!("Last Nodes: {:?}", &nodes[nodes.len() - 20..]);
-        println!(
-            "{:?}",
-            nodes.iter().fold(0, |acc, x| cmp::max(x.length, acc))
-        );
-        Ok(())
+
+        compression::write_compressed(
+            &Compressed {
+                search_window_size: SEARCH_WINDOW_SIZE,
+                nodes,
+            },
+            output_file_path,
+        )
     }
 
     fn decompress(&self, compressed_file: File, output_file_path: &str) -> io::Result<()> {
-        todo!()
+        let compressed: Compressed =
+            bincode::deserialize_from(BufReader::new(compressed_file)).unwrap();
+        let mut file = File::create(output_file_path)?;
+        decompress_nodes(compressed.nodes, &mut file, compressed.search_window_size);
+        Ok(())
     }
 }
 
@@ -200,7 +214,7 @@ fn find_length_of_series_match(left: &[u8], right: &[u8]) -> usize {
 }
 
 // need to keep the search window in memory, which means the length of it needs to be serialised.
-fn decompress<W: Write>(nodes: Vec<Node>, writer: &mut W, search_window_size: usize) {
+fn decompress_nodes<W: Write>(nodes: Vec<Node>, writer: &mut W, search_window_size: usize) {
     let mut search_buffer: WindowByteContainer<u8> = WindowByteContainer::new(search_window_size);
     let mut buffered_writer = BufWriter::new(writer);
 
