@@ -1,3 +1,5 @@
+#![feature(deque_range)]
+
 use std::{env, fs::File, io};
 
 mod block_compress;

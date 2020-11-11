@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
-use std::io::{self, prelude::*, BufReader, BufWriter};
 use std::{cmp, fs::File};
+use std::{
+    collections::VecDeque,
+    io::{self, prelude::*, BufReader, BufWriter},
+};
 
 use super::compression;
 
@@ -223,8 +226,10 @@ fn decompress_nodes<W: Write>(nodes: Vec<Node>, writer: &mut W, search_window_si
         if node.length > 0 {
             // copy from the search buffer
             let search_start_index = search_buffer.vec.len() - node.offset;
-            let b = &search_buffer.vec[search_start_index..search_start_index + node.length];
-            bytes_to_write.extend(b.iter());
+            let b = search_buffer
+                .vec
+                .range(search_start_index..search_start_index + node.length);
+            bytes_to_write.extend(b);
         }
         bytes_to_write.push(node.char);
         buffered_writer
@@ -238,29 +243,31 @@ fn decompress_nodes<W: Write>(nodes: Vec<Node>, writer: &mut W, search_window_si
 /// A fixed sized container that pops old elements as new ones arrive
 #[derive(PartialEq, Debug)]
 struct WindowByteContainer<T> {
-    pub vec: Vec<T>, // maybe VecDeque would be a better container
+    pub vec: VecDeque<T>,
     limit: usize,
 }
 
-impl<T: std::clone::Clone> WindowByteContainer<T> {
+impl<T: std::marker::Copy> WindowByteContainer<T> {
     fn new(limit: usize) -> WindowByteContainer<T> {
         WindowByteContainer {
-            vec: Vec::new(),
+            vec: VecDeque::with_capacity(limit),
             limit,
         }
     }
 
     fn push(&mut self, element: T) {
         if self.vec.len() == self.limit {
-            self.vec.remove(0);
+            self.vec.pop_front();
         }
-        self.vec.push(element)
+        self.vec.push_back(element);
     }
 
     fn push_all(&mut self, elements: &[T]) {
         while self.vec.len() + elements.len() > self.limit {
-            self.vec.remove(0); // really not efficient.
+            self.vec.pop_front();
         }
-        self.vec.extend_from_slice(elements);
+        for e in elements {
+            self.vec.push_back(*e);
+        }
     }
 }
