@@ -31,7 +31,7 @@ fn main() -> io::Result<()> {
 
     if compress_mode {
         compressor
-            .compress(file, path)
+            .compress(file, output_path)
             .expect("Error on compression");
     } else {
         compressor
