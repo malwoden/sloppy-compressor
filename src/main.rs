@@ -1,24 +1,36 @@
-use std::env;
+use compression::Algorithm;
+use std::{env, fs::File, io};
+
 mod block_compress;
+mod compression;
 mod lz77;
 
 /// a really rubbish file compressor.
 ///
-/// Compress: `./sloppy-compressor compress ~/file/path`
-/// will result in a file `~/file/path.scomp`
+/// Compress: `./sloppy-compressor compress ~/file/input.name ~/file/output.name`
 ///
-/// To decompress - `./sloppy-compressor decompress ~/file/path.scomp`
+/// To decompress - `./sloppy-compressor decompress ~/file/input.name ~/file/output.name`
 ///
 /// The program ignores most error checking and will overwrite files without warning.
-fn main() {
+fn main() -> io::Result<()> {
     let args: Vec<String> = env::args().collect();
     let compress_mode = &args[1] == "compress";
     let path = &args[2];
+    let output_path = &args[3];
     println!("{:?}", args);
 
+    let compressor = block_compress::BlockCompression {};
+    let file = File::open(path)?;
+
     if compress_mode {
-        block_compress::compress(path).expect("Error on compression");
+        compressor
+            .compress(file, path)
+            .expect("Error on compression");
     } else {
-        block_compress::decompress(path).expect("Error on decompression");
+        compressor
+            .decompress(file, output_path)
+            .expect("Error on decompression");
     }
+
+    Ok(())
 }

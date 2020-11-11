@@ -1,5 +1,7 @@
-use std::io::{prelude::*, BufWriter};
+use std::io::{self, prelude::*, BufWriter};
 use std::{cmp, fs::File};
+
+use super::compression;
 
 #[cfg(test)]
 mod tests {
@@ -96,20 +98,28 @@ struct Node {
 const SEARCH_WINDOW_SIZE: usize = 4096;
 const PREFIX_WINDOW_SIZE: usize = 4096;
 
-pub fn compress(file: &mut File) {
-    let mut file_bytes = Vec::new();
-    file.read_to_end(&mut file_bytes)
-        .expect("Error on file read");
+pub struct Lz77Compression {}
 
-    let mut nodes = Vec::new();
-    build_lz77_node_list(&file_bytes, |node| nodes.push(node));
-    println!("Compression Nodes: {:?}", nodes.len());
-    println!("Last Nodes: {:?}", &nodes[nodes.len() - 20..]);
+impl compression::Algorithm for Lz77Compression {
+    fn compress(&self, mut file: File, output_file_path: &str) -> io::Result<()> {
+        let mut file_bytes = Vec::new();
+        file.read_to_end(&mut file_bytes)
+            .expect("Error on file read");
 
-    println!(
-        "{:?}",
-        nodes.iter().fold(0, |acc, x| cmp::max(x.length, acc))
-    );
+        let mut nodes = Vec::new();
+        build_lz77_node_list(&file_bytes, |node| nodes.push(node));
+        println!("Compression Nodes: {:?}", nodes.len());
+        println!("Last Nodes: {:?}", &nodes[nodes.len() - 20..]);
+        println!(
+            "{:?}",
+            nodes.iter().fold(0, |acc, x| cmp::max(x.length, acc))
+        );
+        Ok(())
+    }
+
+    fn decompress(&self, compressed_file: File, output_file_path: &str) -> io::Result<()> {
+        todo!()
+    }
 }
 
 fn build_lz77_node_list<C>(to_compress: &[u8], mut callback: C)
