@@ -174,13 +174,23 @@ fn calculate_node(c: u8, left_slice: &[u8], right_slice: &[u8]) -> Node {
     let mut offset = 0;
     let mut length = 0;
 
-    for i in (0..left_slice.len()).rev() {
-        if c == left_slice[i] {
-            let series_match = find_length_of_series_match(&left_slice[i + 1..], right_slice);
-            if series_match > length {
-                offset = left_slice.len() - i;
-                length = series_match + 1; // + 1 to include the 'c' char
+    if left_slice.len() > 0 {
+        let start = left_slice.len() - 1;
+        let mut i = start;
+
+        loop {
+            if c == left_slice[i] {
+                let series_match = find_length_of_series_match(&left_slice[i + 1..], right_slice);
+                if series_match > length {
+                    offset = left_slice.len() - i;
+                    length = series_match + 1; // + 1 to include the 'c' char
+                }
             }
+
+            if i == 0 {
+                break;
+            }
+            i -= 1;
         }
     }
 
