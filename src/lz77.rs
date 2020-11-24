@@ -170,20 +170,36 @@ where
     }
 }
 
-fn calculate_node(c: u8, left_slice: &[u8], right_slice: &[u8]) -> Node {
+fn calculate_node(
+    first_uncompressed_byte: u8,
+    compressed_bytes: &[u8],
+    bytes_to_compressed: &[u8],
+) -> Node {
     let mut offset = 0;
     let mut length = 0;
 
-    if left_slice.len() > 0 {
-        let start = left_slice.len() - 1;
+    // find a byte sequence in the previously compressed bytes.
+    // reverse iterate from the end of the compressed bytes, find a matching byte, then
+    // moving forward through the compressed bytes and the bytes to be compressed, find the
+    // longest matching sequence.
+    if compressed_bytes.len() > 0 {
+        let start = compressed_bytes.len() - 1;
         let mut i = start;
 
         loop {
-            if c == left_slice[i] {
-                let series_match = find_length_of_series_match(&left_slice[i + 1..], right_slice);
+            if first_uncompressed_byte == compressed_bytes[i] {
+                let series_match =
+                    find_length_of_series_match(&compressed_bytes[i + 1..], bytes_to_compressed);
                 if series_match > length {
-                    offset = left_slice.len() - i;
-                    length = series_match + 1; // + 1 to include the 'c' char
+                    if length > 0 {
+                        println!(
+                            "Found new max len match, oldest: {:?}, newest: {:?}",
+                            length, series_match
+                        );
+                    }
+
+                    offset = compressed_bytes.len() - i;
+                    length = series_match + 1; // + 1 to include the 'first_uncompressed_byte' char
                 }
             }
 
@@ -197,16 +213,16 @@ fn calculate_node(c: u8, left_slice: &[u8], right_slice: &[u8]) -> Node {
     let next_char;
     if length == 0 {
         // offset and length are 0 - this is a char literal node
-        next_char = c;
+        next_char = first_uncompressed_byte;
     } else {
-        if length > right_slice.len() {
+        if length > bytes_to_compressed.len() {
             // we always need to have a char in the Node, but if we find a match up to the end of the
             // right slice, we have no 'next' char to set. So we shorten the matched pattern by 1 char
             // and set that final char as the next char for this node
             length -= 1;
         }
 
-        next_char = right_slice[length - 1]
+        next_char = bytes_to_compressed[length - 1]
     }
 
     Node {
