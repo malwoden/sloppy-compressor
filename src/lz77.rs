@@ -83,7 +83,7 @@ mod tests {
     }
 
     #[test]
-    fn serialise_to_variable_length_bit_stream() {
+    fn serailise_nodes_handles_literals_and_refs() {
         let nodes: Vec<Node> = vec![
             Node {
                 offset: 0,
@@ -101,19 +101,45 @@ mod tests {
                 char: b'b',
             },
         ];
-        // 0 01100001 0 01100010 11 0010 00 01100010
+        // 0 01100001 0 01100010 11 0000010 00 01100010
         // 0 = char lit
         // next 8 bits are the 'a' char
         // repeat for 'b' char
         // 11 - a reference node, offset <128
-        // 0010 - the offset value: 2
+        // 0000010 - 7 bit offset value: 2
         // 00 - length value, in this case '2'
         // last 8 bits are the char literal 'b'
         let expected = bitvec![
-            0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 1,
-            0, 0, 0, 1, 0,
+            0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0,
+            0, 1, 1, 0, 0, 0, 1, 0,
         ];
         assert_eq!(expected, serailise_nodes(&nodes));
+    }
+
+    #[test]
+    fn serailise_nodes_large_lengths() {
+        let nodes = vec![Node {
+            offset: 17,
+            length: 8,
+            char: b'a',
+        }];
+        assert_eq!(
+            bitvec![1, 1, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1],
+            serailise_nodes(&nodes)
+        );
+
+        let nodes = vec![Node {
+            offset: 17,
+            length: 24,
+            char: b'a',
+        }];
+        assert_eq!(
+            bitvec![
+                1, 1, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0,
+                1
+            ],
+            serailise_nodes(&nodes)
+        );
     }
 
     #[test]
@@ -175,16 +201,10 @@ impl compression::Algorithm for Lz77Compression {
         Ok(())
     }
 }
-// b'a', b'b', b'a', b'b', b'b'
+
 fn serailise_nodes(nodes: &Vec<Node>) -> BitVec<Msb0, u8> {
     let mut vec = bitvec![Msb0, u8;];
 
-    // (0,0,a), (0,0,b), (2,2,b)
-    // [0 01100001 0 01100010 11 0000 00 01100010]
-    //                             1
-    // [0 01100001 0 01100010 11 0000 00 01100010]
-    // bitvec![0 01100001 0 01100010 11 0010 00 01100010]
-    print!("{:?}", vec);
     for node in nodes {
         if node.length > 0 {
             // offset / length reference
@@ -192,16 +212,12 @@ fn serailise_nodes(nodes: &Vec<Node>) -> BitVec<Msb0, u8> {
             let x = node.offset.view_bits::<Msb0>();
             if node.offset < 128 {
                 vec.push(true);
-                // println!("Bits: ? {:?}", &x[64 - 4..]);
-                vec.extend(x[64 - 4..].to_bitvec());
+                vec.extend(x[64 - 7..].to_bitvec());
             } else {
                 vec.push(false);
                 vec.extend(x[64 - 11..].to_bitvec());
             }
 
-            // println!("node.length: {:?}", node.length);
-
-            // len encoding
             let mut length_encoded = match node.length {
                 1 => panic!("Nodes should not have a size of 1"),
                 2 => bitvec![0, 0],
@@ -210,24 +226,6 @@ fn serailise_nodes(nodes: &Vec<Node>) -> BitVec<Msb0, u8> {
                 5 => bitvec![1, 1, 0, 0],
                 6 => bitvec![1, 1, 0, 1],
                 7 => bitvec![1, 1, 1, 0],
-                8..=22 => {
-                    let adjusted = node.length - 8;
-                    let x = adjusted.view_bits::<Msb0>();
-                    let mut encoded = bitvec![1, 1, 1, 1];
-                    let mut len_vec = x[64 - 4..].to_bitvec();
-                    encoded.append(&mut len_vec);
-                    // println!("encoded 8..22 len: {:?}", encoded);
-                    encoded
-                }
-                23..=37 => {
-                    let adjusted = node.length - 23;
-                    let x = adjusted.view_bits::<Msb0>();
-                    let mut encoded = bitvec![1, 1, 1, 1, 1, 1, 1, 1];
-                    let mut len_vec = x[64 - 4..].to_bitvec();
-                    encoded.append(&mut len_vec);
-                    // println!("encoded 23..37 len: {:?}", encoded);
-                    encoded
-                }
                 _ => {
                     let mut encoded = bitvec![];
                     let padding_one_blocks = (node.length + 7) / 15;
@@ -240,7 +238,7 @@ fn serailise_nodes(nodes: &Vec<Node>) -> BitVec<Msb0, u8> {
                     let x = adjusted.view_bits::<Msb0>();
                     let mut len_vec = x[64 - 4..].to_bitvec();
                     encoded.append(&mut len_vec);
-                    println!("encoded > 37 len {:?}: {:?}", node.length, encoded);
+                    println!("encoded >7 len {:?}: {:?}", node.length, encoded);
                     encoded
                 }
             };
