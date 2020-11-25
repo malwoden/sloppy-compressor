@@ -1,3 +1,4 @@
+use bitvec::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::{cmp, fs::File};
 use std::{
@@ -56,9 +57,9 @@ mod tests {
 
     #[test]
     fn build_lz77_node_list_test_no_trailing_chars() {
-        let bytes = vec![b'a', b'b', b'a', b'b']; // D:
+        let bytes = vec![b'a', b'b', b'a', b'b', b'b']; // D:
 
-        // (0,0,a), (0,0,b), (2,1,b)
+        // (0,0,a), (0,0,b), (2,2,b)
         let expected: Vec<Node> = vec![
             Node {
                 offset: 0,
@@ -72,13 +73,47 @@ mod tests {
             },
             Node {
                 offset: 2,
-                length: 1,
+                length: 2,
                 char: b'b',
             },
         ];
         let mut nodes = Vec::new();
         build_lz77_node_list(&bytes, |node| nodes.push(node));
         assert_eq!(expected, nodes);
+    }
+
+    #[test]
+    fn serialise_to_variable_length_bit_stream() {
+        let nodes: Vec<Node> = vec![
+            Node {
+                offset: 0,
+                length: 0,
+                char: b'a',
+            },
+            Node {
+                offset: 0,
+                length: 0,
+                char: b'b',
+            },
+            Node {
+                offset: 2,
+                length: 2,
+                char: b'b',
+            },
+        ];
+        // 0 01100001 0 01100010 11 0010 00 01100010
+        // 0 = char lit
+        // next 8 bits are the 'a' char
+        // repeat for 'b' char
+        // 11 - a reference node, offset <128
+        // 0010 - the offset value: 2
+        // 00 - length value, in this case '2'
+        // last 8 bits are the char literal 'b'
+        let expected = bitvec![
+            0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 1,
+            0, 0, 0, 1, 0,
+        ];
+        assert_eq!(expected, serailise_nodes(&nodes));
     }
 
     #[test]
@@ -99,8 +134,8 @@ struct Node {
     char: u8,
 }
 
-const SEARCH_WINDOW_SIZE: usize = 4096;
-const PREFIX_WINDOW_SIZE: usize = 4096;
+const SEARCH_WINDOW_SIZE: usize = 2048;
+const PREFIX_WINDOW_SIZE: usize = 2048;
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Compressed {
@@ -121,6 +156,8 @@ impl compression::Algorithm for Lz77Compression {
         println!("Compression Nodes: {:?}", nodes.len());
         println!("Last Nodes: {:?}", &nodes[nodes.len() - 20..]);
 
+        println!("as bits: {:?}", serailise_nodes(&nodes).len() / 8);
+
         compression::write_compressed(
             &Compressed {
                 search_window_size: SEARCH_WINDOW_SIZE,
@@ -137,6 +174,86 @@ impl compression::Algorithm for Lz77Compression {
         decompress_nodes(compressed.nodes, &mut file, compressed.search_window_size);
         Ok(())
     }
+}
+// b'a', b'b', b'a', b'b', b'b'
+fn serailise_nodes(nodes: &Vec<Node>) -> BitVec<Msb0, u8> {
+    let mut vec = bitvec![Msb0, u8;];
+
+    // (0,0,a), (0,0,b), (2,2,b)
+    // [0 01100001 0 01100010 11 0000 00 01100010]
+    //                             1
+    // [0 01100001 0 01100010 11 0000 00 01100010]
+    // bitvec![0 01100001 0 01100010 11 0010 00 01100010]
+    print!("{:?}", vec);
+    for node in nodes {
+        if node.length > 0 {
+            // offset / length reference
+            vec.push(true);
+            let x = node.offset.view_bits::<Msb0>();
+            if node.offset < 128 {
+                vec.push(true);
+                // println!("Bits: ? {:?}", &x[64 - 4..]);
+                vec.extend(x[64 - 4..].to_bitvec());
+            } else {
+                vec.push(false);
+                vec.extend(x[64 - 11..].to_bitvec());
+            }
+
+            // println!("node.length: {:?}", node.length);
+
+            // len encoding
+            let mut length_encoded = match node.length {
+                1 => panic!("Nodes should not have a size of 1"),
+                2 => bitvec![0, 0],
+                3 => bitvec![0, 1],
+                4 => bitvec![1, 0],
+                5 => bitvec![1, 1, 0, 0],
+                6 => bitvec![1, 1, 0, 1],
+                7 => bitvec![1, 1, 1, 0],
+                8..=22 => {
+                    let adjusted = node.length - 8;
+                    let x = adjusted.view_bits::<Msb0>();
+                    let mut encoded = bitvec![1, 1, 1, 1];
+                    let mut len_vec = x[64 - 4..].to_bitvec();
+                    encoded.append(&mut len_vec);
+                    // println!("encoded 8..22 len: {:?}", encoded);
+                    encoded
+                }
+                23..=37 => {
+                    let adjusted = node.length - 23;
+                    let x = adjusted.view_bits::<Msb0>();
+                    let mut encoded = bitvec![1, 1, 1, 1, 1, 1, 1, 1];
+                    let mut len_vec = x[64 - 4..].to_bitvec();
+                    encoded.append(&mut len_vec);
+                    // println!("encoded 23..37 len: {:?}", encoded);
+                    encoded
+                }
+                _ => {
+                    let mut encoded = bitvec![];
+                    let padding_one_blocks = (node.length + 7) / 15;
+                    for _ in 0..padding_one_blocks {
+                        let mut padding_block = bitvec![1, 1, 1, 1];
+                        encoded.append(&mut padding_block);
+                    }
+
+                    let adjusted = node.length - (padding_one_blocks * 15 - 7);
+                    let x = adjusted.view_bits::<Msb0>();
+                    let mut len_vec = x[64 - 4..].to_bitvec();
+                    encoded.append(&mut len_vec);
+                    println!("encoded > 37 len {:?}: {:?}", node.length, encoded);
+                    encoded
+                }
+            };
+
+            vec.append(&mut length_encoded);
+        } else {
+            // literal byte - push '0' followed by 8 bits for the byte val
+            vec.push(false);
+        }
+        vec.extend_from_bitslice(BitSlice::from_element(&node.char));
+    }
+
+    vec
 }
 
 fn build_lz77_node_list<C>(to_compress: &[u8], mut callback: C)
@@ -191,13 +308,6 @@ fn calculate_node(
                 let series_match =
                     find_length_of_series_match(&compressed_bytes[i + 1..], bytes_to_compressed);
                 if series_match > length {
-                    if length > 0 {
-                        println!(
-                            "Found new max len match, oldest: {:?}, newest: {:?}",
-                            length, series_match
-                        );
-                    }
-
                     offset = compressed_bytes.len() - i;
                     length = series_match + 1; // + 1 to include the 'first_uncompressed_byte' char
                 }
