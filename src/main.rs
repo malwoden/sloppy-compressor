@@ -2,6 +2,7 @@
 
 use std::{env, fs::File, io};
 
+mod bitvec_issues;
 mod block_compress;
 mod compression;
 mod lz77;

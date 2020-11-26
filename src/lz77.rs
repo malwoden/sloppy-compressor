@@ -1,5 +1,6 @@
 use bitvec::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::convert::TryFrom;
 use std::{cmp, fs::File};
 use std::{
     collections::VecDeque,
@@ -143,6 +144,47 @@ mod tests {
     }
 
     #[test]
+    fn serailise_nodes_size_experiment() {
+        // Q: What is most efficient: 3 raw bytes or 1 raw byte and a 2 byte-len node ref?
+
+        let three_raw_bytes = vec![
+            Node {
+                offset: 0,
+                length: 0,
+                char: b'a',
+            },
+            Node {
+                offset: 0,
+                length: 0,
+                char: b'a',
+            },
+            Node {
+                offset: 0,
+                length: 0,
+                char: b'a',
+            },
+        ];
+        assert_eq!(
+            bitvec![
+                0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 1,
+            ],
+            serailise_nodes(&three_raw_bytes)
+        );
+
+        let two_length_node_ref = vec![Node {
+            offset: 2,
+            length: 2,
+            char: b'a',
+        }];
+        assert_eq!(
+            bitvec![1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1,],
+            serailise_nodes(&two_length_node_ref)
+        );
+
+        // A: the reference is always smaller, even for larger offset values that require extra bits
+    }
+
+    #[test]
     fn windowing_buffer() {
         let mut search_buffer: WindowByteContainer<u8> = WindowByteContainer::new(4);
         search_buffer.push(b'a');
@@ -153,6 +195,7 @@ mod tests {
         assert_eq!(search_buffer.vec, vec![b'c', b'd', b'e', b'z']);
     }
 }
+
 #[derive(PartialEq, Debug, Serialize, Deserialize)]
 struct Node {
     offset: usize,
@@ -204,6 +247,7 @@ impl compression::Algorithm for Lz77Compression {
 
 fn serailise_nodes(nodes: &Vec<Node>) -> BitVec<Msb0, u8> {
     let mut vec = bitvec![Msb0, u8;];
+    // Don't reserve here as a bug in bit-vec results in slower extend/append ops.
 
     for node in nodes {
         if node.length > 0 {
@@ -212,46 +256,61 @@ fn serailise_nodes(nodes: &Vec<Node>) -> BitVec<Msb0, u8> {
             let x = node.offset.view_bits::<Msb0>();
             if node.offset < 128 {
                 vec.push(true);
-                vec.extend(x[64 - 7..].to_bitvec());
+                for b in x[64 - 7..].iter() {
+                    vec.push(*b);
+                }
             } else {
                 vec.push(false);
-                vec.extend(x[64 - 11..].to_bitvec());
+                for b in x[64 - 11..].iter() {
+                    vec.push(*b);
+                }
             }
 
-            let mut length_encoded = match node.length {
+            let length_encoded = match node.length {
                 1 => panic!("Nodes should not have a size of 1"),
-                2 => bitvec![0, 0],
-                3 => bitvec![0, 1],
-                4 => bitvec![1, 0],
-                5 => bitvec![1, 1, 0, 0],
-                6 => bitvec![1, 1, 0, 1],
-                7 => bitvec![1, 1, 1, 0],
+                2 => bitvec![Msb0, u8;0, 0],
+                3 => bitvec![Msb0, u8;0, 1],
+                4 => bitvec![Msb0, u8;1, 0],
+                5 => bitvec![Msb0, u8;1, 1, 0, 0],
+                6 => bitvec![Msb0, u8;1, 1, 0, 1],
+                7 => bitvec![Msb0, u8;1, 1, 1, 0],
                 _ => {
-                    let mut encoded = bitvec![];
+                    let mut encoded = bitvec![Msb0, u8;];
                     let padding_one_blocks = (node.length + 7) / 15;
+
                     for _ in 0..padding_one_blocks {
                         let mut padding_block = bitvec![1, 1, 1, 1];
                         encoded.append(&mut padding_block);
                     }
 
                     let adjusted = node.length - (padding_one_blocks * 15 - 7);
-                    let x = adjusted.view_bits::<Msb0>();
-                    let mut len_vec = x[64 - 4..].to_bitvec();
-                    encoded.append(&mut len_vec);
-                    println!("encoded >7 len {:?}: {:?}", node.length, encoded);
+                    let adjusted = u8::try_from(adjusted).unwrap();
+                    let bits = adjusted.view_bits::<Msb0>();
+                    encoded.extend_from_bitslice(&bits[4..]);
                     encoded
                 }
             };
 
-            vec.append(&mut length_encoded);
+            append_bitvecs(&mut vec, &length_encoded);
         } else {
             // literal byte - push '0' followed by 8 bits for the byte val
             vec.push(false);
         }
-        vec.extend_from_bitslice(BitSlice::from_element(&node.char));
+        let literal = BitSlice::<Msb0, u8>::from_element(&node.char);
+        append_bitvecs(&mut vec, &literal.to_bitvec());
     }
 
+    // TODO: add end marker and padding
+    // vec.append(&mut bitvec![1, 1, 0, 0, 0, 0, 0, 0, 0]);
+
     vec
+}
+
+fn append_bitvecs(original: &mut BitVec<Msb0, u8>, to_add: &BitVec<Msb0, u8>) {
+    for b in to_add.iter() {
+        original.push(*b);
+    }
+    // dont use append/extend as they are slow
 }
 
 fn build_lz77_node_list<C>(to_compress: &[u8], mut callback: C)
