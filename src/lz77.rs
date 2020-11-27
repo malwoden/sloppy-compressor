@@ -1,11 +1,11 @@
 use bitvec::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::convert::TryFrom;
 use std::{cmp, fs::File};
 use std::{
     collections::VecDeque,
     io::{self, prelude::*, BufReader, BufWriter},
 };
+use std::{convert::TryFrom, mem::size_of};
 
 use super::compression;
 
@@ -215,17 +215,19 @@ mod tests {
 
 #[derive(PartialEq, Debug, Serialize, Deserialize)]
 struct Node {
-    offset: usize,
-    length: usize,
+    offset: u16,
+    length: u16,
     char: u8,
 }
 
-const SEARCH_WINDOW_SIZE: usize = 2048;
-const PREFIX_WINDOW_SIZE: usize = 2048;
+const SEARCH_WINDOW_SIZE: u16 = 2048;
+const PREFIX_WINDOW_SIZE: u16 = 2048;
+
+const U16_BIT_SIZE: usize = size_of::<u16>() * 8;
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Compressed {
-    search_window_size: usize,
+    search_window_size: u16,
     nodes: Vec<Node>,
 }
 
@@ -273,12 +275,12 @@ fn serailise_nodes(nodes: &Vec<Node>) -> BitVec<Msb0, u8> {
             let x = node.offset.view_bits::<Msb0>();
             if node.offset < 128 {
                 vec.push(true);
-                for b in x[64 - 7..].iter() {
+                for b in x[U16_BIT_SIZE - 7..].iter() {
                     vec.push(*b);
                 }
             } else {
                 vec.push(false);
-                for b in x[64 - 11..].iter() {
+                for b in x[U16_BIT_SIZE - 11..].iter() {
                     vec.push(*b);
                 }
             }
@@ -354,12 +356,12 @@ where
 
     loop {
         let c = to_compress[byte_ptr];
-        let search_slice_start_index = byte_ptr.saturating_sub(SEARCH_WINDOW_SIZE);
+        let search_slice_start_index = byte_ptr.saturating_sub(usize::from(SEARCH_WINDOW_SIZE));
         let search_slice_end_index = byte_ptr;
 
         let prefix_slice_start_index = byte_ptr + 1;
         let prefix_slice_end_index = cmp::min(
-            byte_ptr.saturating_add(PREFIX_WINDOW_SIZE),
+            byte_ptr.saturating_add(usize::from(PREFIX_WINDOW_SIZE)),
             to_compress.len(),
         );
 
@@ -367,7 +369,7 @@ where
         let prefix_slice = &to_compress[prefix_slice_start_index..prefix_slice_end_index];
 
         let node = calculate_node(c, search_slice, prefix_slice);
-        byte_ptr += 1 + node.length; // advance the byte pointer 1 past the position of char literal in the node
+        byte_ptr += 1 + usize::from(node.length); // advance the byte pointer 1 past the position of char literal in the node
 
         callback(node);
 
@@ -426,8 +428,8 @@ fn calculate_node(
     }
 
     Node {
-        offset,
-        length,
+        offset: u16::try_from(offset).unwrap(),
+        length: u16::try_from(length).unwrap(),
         char: next_char,
     }
 }
@@ -443,18 +445,20 @@ fn find_length_of_series_match(left: &[u8], right: &[u8]) -> usize {
 }
 
 // need to keep the search window in memory, which means the length of it needs to be serialised.
-fn decompress_nodes<W: Write>(nodes: Vec<Node>, writer: &mut W, search_window_size: usize) {
-    let mut search_buffer: WindowByteContainer<u8> = WindowByteContainer::new(search_window_size);
+fn decompress_nodes<W: Write>(nodes: Vec<Node>, writer: &mut W, search_window_size: u16) {
+    let mut search_buffer: WindowByteContainer<u8> =
+        WindowByteContainer::new(usize::from(search_window_size));
     let mut buffered_writer = BufWriter::new(writer);
 
     for node in nodes {
         let mut bytes_to_write = Vec::new();
         if node.length > 0 {
             // copy from the search buffer
-            let search_start_index = search_buffer.vec.len() - node.offset;
+            let search_start_index = search_buffer.vec.len() - usize::from(node.offset);
+            let search_stop_index = search_start_index + usize::from(node.length);
             let b = search_buffer
                 .vec
-                .range(search_start_index..search_start_index + node.length);
+                .range(search_start_index..search_stop_index);
             bytes_to_write.extend(b);
         }
         bytes_to_write.push(node.char);
