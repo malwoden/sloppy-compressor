@@ -321,7 +321,11 @@ fn serailise_nodes(nodes: &Vec<Node>) -> BitVec<Msb0, u8> {
 }
 
 /// Adds the end-of-stream bit sequence and pads the vector to a whole byte
-fn append_end_marker(encoding: &mut BitVec<Msb0, u8>) {
+fn append_end_marker<O, T>(encoding: &mut BitVec<O, T>)
+where
+    O: BitOrder,
+    T: BitStore,
+{
     encoding.append(&mut bitvec![1, 1, 0, 0, 0, 0, 0, 0, 0]);
     let trailing_bits = encoding.len() % 8;
     if trailing_bits > 0 {
@@ -331,7 +335,11 @@ fn append_end_marker(encoding: &mut BitVec<Msb0, u8>) {
     }
 }
 
-fn append_bitvecs(original: &mut BitVec<Msb0, u8>, to_add: &BitVec<Msb0, u8>) {
+fn append_bitvecs<O, T>(original: &mut BitVec<O, T>, to_add: &BitVec<O, T>)
+where
+    O: BitOrder,
+    T: BitStore,
+{
     for b in to_add.iter() {
         original.push(*b);
     }
