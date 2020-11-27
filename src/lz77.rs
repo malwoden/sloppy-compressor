@@ -185,6 +185,23 @@ mod tests {
     }
 
     #[test]
+    fn append_end_marker_adds_byte_padding() {
+        let mut vec = bitvec![Msb0, u8;];
+        append_end_marker(&mut vec);
+        assert_eq!(
+            bitvec![1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,],
+            vec
+        );
+
+        vec = bitvec![Msb0, u8;1, 1, 1];
+        append_end_marker(&mut vec);
+        assert_eq!(
+            bitvec![1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,],
+            vec
+        );
+    }
+
+    #[test]
     fn windowing_buffer() {
         let mut search_buffer: WindowByteContainer<u8> = WindowByteContainer::new(4);
         search_buffer.push(b'a');
@@ -300,17 +317,25 @@ fn serailise_nodes(nodes: &Vec<Node>) -> BitVec<Msb0, u8> {
         append_bitvecs(&mut vec, &literal.to_bitvec());
     }
 
-    // TODO: add end marker and padding
-    // vec.append(&mut bitvec![1, 1, 0, 0, 0, 0, 0, 0, 0]);
-
     vec
+}
+
+/// Adds the end-of-stream bit sequence and pads the vector to a whole byte
+fn append_end_marker(encoding: &mut BitVec<Msb0, u8>) {
+    encoding.append(&mut bitvec![1, 1, 0, 0, 0, 0, 0, 0, 0]);
+    let trailing_bits = encoding.len() % 8;
+    if trailing_bits > 0 {
+        for _ in 0..(8 - trailing_bits) {
+            encoding.push(false);
+        }
+    }
 }
 
 fn append_bitvecs(original: &mut BitVec<Msb0, u8>, to_add: &BitVec<Msb0, u8>) {
     for b in to_add.iter() {
         original.push(*b);
     }
-    // dont use append/extend as they are slow
+    // dont use append/extend as they vastly slower: https://github.com/myrrlyn/bitvec/issues/94
 }
 
 fn build_lz77_node_list<C>(to_compress: &[u8], mut callback: C)
