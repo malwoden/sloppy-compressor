@@ -8,9 +8,12 @@ use std::{
 use std::{convert::TryFrom, mem::size_of};
 
 use super::compression;
+use crate::compression::Algorithm;
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
 
     #[test]
@@ -211,6 +214,19 @@ mod tests {
         search_buffer.push(b'z');
         assert_eq!(search_buffer.vec, vec![b'c', b'd', b'e', b'z']);
     }
+
+    #[test]
+    fn writes_compressed_file() {
+        // a bad test - but will help catch some clear errors whilst under dev
+        let mut input_file = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let mut output_file = input_file.clone();
+        input_file.push("src/bitvec_issues.rs");
+        output_file.push("src/bitvec_issues.rs.testout");
+
+        let f = File::open(input_file).unwrap();
+        let c = Lz77Compression {};
+        c.compress(f, output_file.to_str().unwrap()).unwrap();
+    }
 }
 
 #[derive(PartialEq, Debug, Serialize, Deserialize)]
@@ -241,18 +257,11 @@ impl compression::Algorithm for Lz77Compression {
 
         let mut nodes = Vec::new();
         build_lz77_node_list(&file_bytes, |node| nodes.push(node));
-        println!("Compression Nodes: {:?}", nodes.len());
-        println!("Last Nodes: {:?}", &nodes[nodes.len() - 20..]);
 
-        println!("as bits: {:?}", serailise_nodes(&nodes).len() / 8);
+        let encoded_nodes = serailise_nodes(&nodes);
+        let bv: Vec<u8> = encoded_nodes.into();
 
-        compression::write_compressed(
-            &Compressed {
-                search_window_size: SEARCH_WINDOW_SIZE,
-                nodes,
-            },
-            output_file_path,
-        )
+        compression::write_to_new_file(&bv, output_file_path)
     }
 
     fn decompress(&self, compressed_file: File, output_file_path: &str) -> io::Result<()> {
