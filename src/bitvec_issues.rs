@@ -1,11 +1,8 @@
-use bitvec::prelude::*;
-
-const DATA_ARRAY: [u8; 100000] = [3; 100000];
-
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use bitvec::prelude::*;
 
+    const DATA_ARRAY: [u8; 100000] = [3; 100000];
     #[test]
     fn bitvec_using_push_higher_cap() {
         let mut vec = bitvec![Msb0, u8;];
