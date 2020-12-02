@@ -60,6 +60,21 @@ mod tests {
     }
 
     #[test]
+    fn build_lz77_node_list_offset_cannot_exceed_2047() {
+        let mut bytes: Vec<u8> = vec![0; 2060];
+        bytes[0] = 0;
+        bytes[1] = 1;
+        bytes[2048] = 1;
+        bytes[2049] = 1;
+        bytes[2050] = 0;
+
+        let mut nodes = Vec::new();
+        build_lz77_node_list(&bytes, |node| nodes.push(node));
+
+        assert!(nodes.iter().all(|e| e.offset < 2048))
+    }
+
+    #[test]
     fn build_lz77_node_list_test_no_trailing_chars() {
         let bytes = vec![b'a', b'b', b'a', b'b', b'b']; // D:
 
@@ -348,8 +363,8 @@ impl compression::Algorithm for Lz77Compression {
 
         let nodes = deserialise_nodes(file_bytes);
 
-        // write nodes?
-
+        let mut file = File::create(output_file_path)?;
+        decompress_nodes(nodes, &mut file, SEARCH_WINDOW_SIZE);
         Ok(())
     }
 }
@@ -586,7 +601,7 @@ where
 
     loop {
         let c = to_compress[byte_ptr];
-        let search_slice_start_index = byte_ptr.saturating_sub(usize::from(SEARCH_WINDOW_SIZE));
+        let search_slice_start_index = byte_ptr.saturating_sub(usize::from(SEARCH_WINDOW_SIZE) - 1);
         let search_slice_end_index = byte_ptr;
 
         let prefix_slice_start_index = byte_ptr + 1;
