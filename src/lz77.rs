@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::{cmp, fs::File};
 use std::{
     collections::VecDeque,
-    io::{self, prelude::*, BufReader, BufWriter},
+    io::{self, prelude::*, BufWriter},
 };
 use std::{convert::TryFrom, mem::size_of};
 
@@ -227,6 +227,83 @@ mod tests {
         let c = Lz77Compression {};
         c.compress(f, output_file.to_str().unwrap()).unwrap();
     }
+
+    #[test]
+    fn converts_slice_to_byte() {
+        let slice = BitSlice::<Msb0, u8>::from_element(&b'w');
+        let byte = slice_to_byte(slice);
+        assert_eq!(byte, b'w');
+    }
+
+    #[test]
+    fn deserialises_length() {
+        assert_eq!((2, 2), deserialise_length(bits![Msb0, u8; 0,0,0,0]));
+        assert_eq!((3, 2), deserialise_length(bits![Msb0, u8; 0,1,0,0]));
+        assert_eq!((4, 2), deserialise_length(bits![Msb0, u8; 1,0,0,0]));
+        assert_eq!((5, 4), deserialise_length(bits![Msb0, u8; 1,1,0,0]));
+        assert_eq!((6, 4), deserialise_length(bits![Msb0, u8; 1,1,0,1]));
+        assert_eq!((7, 4), deserialise_length(bits![Msb0, u8; 1,1,1,0]));
+        assert_eq!((8, 8), deserialise_length(bits![Msb0, u8; 1,1,1,1,0,0,0,0]));
+        assert_eq!((9, 8), deserialise_length(bits![Msb0, u8; 1,1,1,1,0,0,0,1]));
+        assert_eq!(
+            (23, 12),
+            deserialise_length(bits![Msb0, u8; 1,1,1,1,1,1,1,1,0,0,0,0])
+        );
+        assert_eq!(
+            (37, 12),
+            deserialise_length(bits![Msb0, u8; 1,1,1,1,1,1,1,1,1,1,1,0])
+        );
+        assert_eq!(
+            (38, 16),
+            deserialise_length(bits![Msb0, u8; 1,1,1,1,1,1,1,1,1,1,1,1,0,0,0,0])
+        );
+
+        let mut max_val = bitvec![Msb0, u8;];
+        let four_bit_blocks_for_max_size = ((2047 + 7) / 15) + 1; // +1 for final 4 bits;
+        assert_eq!(137, four_bit_blocks_for_max_size);
+
+        max_val.resize(137 * 4, true);
+        max_val.set(544, true);
+        max_val.set(545, true);
+        max_val.set(546, true);
+        max_val.set(547, false);
+        assert_eq!((2047, 548), deserialise_length(&max_val));
+    }
+
+    #[test]
+    fn length_encode_decode_in_harmony() {
+        assert_eq!((2, 2), deserialise_length(&serialise_length(2)));
+        assert_eq!((7, 4), deserialise_length(&serialise_length(7)));
+        assert_eq!((8, 8), deserialise_length(&serialise_length(8)));
+        assert_eq!((23, 12), deserialise_length(&serialise_length(23)));
+        assert_eq!((77, 24), deserialise_length(&serialise_length(77)));
+        assert_eq!((1024, 276), deserialise_length(&serialise_length(1024)));
+    }
+
+    #[test]
+    fn serialise_and_deserialise_nodes() {
+        let nodes: Vec<Node> = vec![
+            Node {
+                offset: 0,
+                length: 0,
+                char: b'a',
+            },
+            Node {
+                offset: 0,
+                length: 0,
+                char: b'b',
+            },
+            Node {
+                offset: 2,
+                length: 2,
+                char: b'b',
+            },
+        ];
+        let mut serialised = serailise_nodes(&nodes);
+        append_end_marker(&mut serialised);
+        let deserialised = deserialise_nodes(serialised.into());
+        assert_eq!(nodes, deserialised);
+    }
 }
 
 #[derive(PartialEq, Debug, Serialize, Deserialize)]
@@ -258,17 +335,21 @@ impl compression::Algorithm for Lz77Compression {
         let mut nodes = Vec::new();
         build_lz77_node_list(&file_bytes, |node| nodes.push(node));
 
-        let encoded_nodes = serailise_nodes(&nodes);
+        let mut encoded_nodes = serailise_nodes(&nodes);
+        append_end_marker(&mut encoded_nodes);
         let bv: Vec<u8> = encoded_nodes.into();
 
         compression::write_to_new_file(&bv, output_file_path)
     }
 
-    fn decompress(&self, compressed_file: File, output_file_path: &str) -> io::Result<()> {
-        let compressed: Compressed =
-            bincode::deserialize_from(BufReader::new(compressed_file)).unwrap();
-        let mut file = File::create(output_file_path)?;
-        decompress_nodes(compressed.nodes, &mut file, compressed.search_window_size);
+    fn decompress(&self, mut compressed_file: File, output_file_path: &str) -> io::Result<()> {
+        let mut file_bytes: Vec<u8> = vec![];
+        compressed_file.read_to_end(&mut file_bytes)?;
+
+        let nodes = deserialise_nodes(file_bytes);
+
+        // write nodes?
+
         Ok(())
     }
 }
@@ -294,31 +375,7 @@ fn serailise_nodes(nodes: &Vec<Node>) -> BitVec<Msb0, u8> {
                 }
             }
 
-            let length_encoded = match node.length {
-                1 => panic!("Nodes should not have a size of 1"),
-                2 => bitvec![Msb0, u8;0, 0],
-                3 => bitvec![Msb0, u8;0, 1],
-                4 => bitvec![Msb0, u8;1, 0],
-                5 => bitvec![Msb0, u8;1, 1, 0, 0],
-                6 => bitvec![Msb0, u8;1, 1, 0, 1],
-                7 => bitvec![Msb0, u8;1, 1, 1, 0],
-                _ => {
-                    let mut encoded = bitvec![Msb0, u8;];
-                    let padding_one_blocks = (node.length + 7) / 15;
-
-                    for _ in 0..padding_one_blocks {
-                        let mut padding_block = bitvec![1, 1, 1, 1];
-                        encoded.append(&mut padding_block);
-                    }
-
-                    let adjusted = node.length - (padding_one_blocks * 15 - 7);
-                    let adjusted = u8::try_from(adjusted).unwrap();
-                    let bits = adjusted.view_bits::<Msb0>();
-                    encoded.extend_from_bitslice(&bits[4..]);
-                    encoded
-                }
-            };
-
+            let length_encoded = serialise_length(node.length);
             append_bitvecs(&mut vec, &length_encoded);
         } else {
             // literal byte - push '0' followed by 8 bits for the byte val
@@ -331,13 +388,177 @@ fn serailise_nodes(nodes: &Vec<Node>) -> BitVec<Msb0, u8> {
     vec
 }
 
+fn serialise_length(length: u16) -> BitVec<Msb0, u8> {
+    return match length {
+        1 => panic!("Nodes should not have a size of 1"),
+        2 => bitvec![Msb0, u8;0, 0],
+        3 => bitvec![Msb0, u8;0, 1],
+        4 => bitvec![Msb0, u8;1, 0],
+        5 => bitvec![Msb0, u8;1, 1, 0, 0],
+        6 => bitvec![Msb0, u8;1, 1, 0, 1],
+        7 => bitvec![Msb0, u8;1, 1, 1, 0],
+        _ => {
+            let mut encoded = bitvec![Msb0, u8;];
+            let padding_one_blocks = (length + 7) / 15;
+
+            for _ in 0..padding_one_blocks {
+                let mut padding_block = bitvec![1, 1, 1, 1];
+                encoded.append(&mut padding_block);
+            }
+
+            let adjusted = length - (padding_one_blocks * 15 - 7);
+            let adjusted = u8::try_from(adjusted).unwrap();
+            let bits = adjusted.view_bits::<Msb0>();
+            encoded.extend_from_bitslice(&bits[4..]);
+            encoded
+        }
+    };
+}
+
+fn deserialise_nodes(file_bytes: Vec<u8>) -> Vec<Node> {
+    let end_of_stream_marker = bits![Msb0, u8; 1, 1, 0, 0, 0, 0, 0, 0, 0];
+
+    let mut nodes: Vec<Node> = vec![];
+    let bit_view = file_bytes.view_bits::<Msb0>();
+
+    let mut bitstream_offset = 0;
+    while bitstream_offset < bit_view.len() {
+        let is_reference_node = bit_view[bitstream_offset];
+        bitstream_offset += 1;
+
+        if !is_reference_node {
+            // next 8 bits will be a literal byte node
+            let byte_literal = &bit_view[bitstream_offset..bitstream_offset + 8];
+            nodes.push(Node {
+                length: 0,
+                offset: 0,
+                char: slice_to_byte(&byte_literal),
+            });
+            bitstream_offset += 8;
+        } else {
+            // flag 1: this is a node reference
+            let offset_sub_128 = bit_view[bitstream_offset];
+            bitstream_offset += 1;
+
+            let offset: u16;
+            if offset_sub_128 {
+                // 7 bits for the offset size
+                offset = slice_to_offset(&bit_view[bitstream_offset..bitstream_offset + 7]);
+                bitstream_offset += 7;
+            } else {
+                // 11 bits for the offset
+                offset = slice_to_offset(&bit_view[bitstream_offset..bitstream_offset + 11]);
+                bitstream_offset += 11;
+            }
+
+            let (length, bits_read) = deserialise_length(&bit_view[bitstream_offset..]);
+            bitstream_offset += usize::from(bits_read);
+
+            // next 8 bits will be a literal byte node
+            let byte_literal = &bit_view[bitstream_offset..bitstream_offset + 8];
+            nodes.push(Node {
+                length,
+                offset,
+                char: slice_to_byte(&byte_literal),
+            });
+            bitstream_offset += 8;
+        }
+
+        if bit_view[bitstream_offset..bitstream_offset + 9] == end_of_stream_marker {
+            break;
+        }
+    }
+    nodes
+}
+
+/// Extract the length from the encoded bit array
+///
+/// Expectation is the slice starts at the first bit of the encoded length, to the end of the stream.
+///
+/// Returns a tuple in the form (length, num bits consumed)
+fn deserialise_length(slice: &BitSlice<Msb0, u8>) -> (u16, u16) {
+    let two_bit_size = &slice[0..2];
+    if two_bit_size != bits![Msb0, u8; 1, 1] {
+        if two_bit_size == bits![Msb0, u8; 0, 0] {
+            return (2, 2);
+        }
+
+        if two_bit_size == bits![Msb0, u8; 0, 1] {
+            return (3, 2);
+        }
+
+        return (4, 2); // 1, 1
+    }
+
+    let four_bit_size = &slice[0..4];
+    if four_bit_size != bits![Msb0, u8; 1, 1, 1, 1] {
+        if four_bit_size == bits![Msb0, u8; 1, 1, 0, 0] {
+            return (5, 4);
+        }
+
+        if four_bit_size == bits![Msb0, u8; 1, 1, 0, 1] {
+            return (6, 4);
+        }
+
+        return (7, 4);
+    }
+
+    let four_bits_all_set = bits![Msb0, u8; 1,1,1,1];
+    let mut four_bit_block_count = 0;
+    loop {
+        // iterate through the bit slice, find the first non 1,1,1,1 block then reverse the encoding.
+        let block_index = four_bit_block_count * 4;
+        let block_bits = &slice[block_index..block_index + 4];
+        if block_bits == four_bits_all_set {
+            four_bit_block_count += 1;
+        } else {
+            // non 1,1,1,1 sequence found - read the next for bits then invert the enoding formula:
+            // (1111 repeated N times) xxxx, where  is integer result of (length + 7) / 15, and xxxx is length - (N*15 − 7)
+            let trailing_bit_value = slice_to_offset(block_bits);
+            let length = (four_bit_block_count * 15 - 7) + trailing_bit_value as usize;
+
+            // +4 to account for the non: 1,1,1,1 block at the end of the encoded length
+            let next_read_offset = u16::try_from(block_index + 4).unwrap();
+            return (u16::try_from(length).unwrap(), next_read_offset);
+        }
+    }
+}
+
+fn slice_to_byte<T>(slice: &BitSlice<Msb0, T>) -> u8
+where
+    T: BitStore,
+{
+    let mut as_byte: u8 = 0;
+    for (i, flag) in slice.iter().rev().enumerate() {
+        if *flag {
+            as_byte = as_byte | (1 << i);
+        }
+    }
+
+    as_byte
+}
+
+fn slice_to_offset<T>(slice: &BitSlice<Msb0, T>) -> u16
+where
+    T: BitStore,
+{
+    let mut as_byte: u16 = 0;
+    for (i, flag) in slice.iter().rev().enumerate() {
+        if *flag {
+            as_byte = as_byte | (1 << i);
+        }
+    }
+
+    as_byte
+}
+
 /// Adds the end-of-stream bit sequence and pads the vector to a whole byte
 fn append_end_marker<O, T>(encoding: &mut BitVec<O, T>)
 where
     O: BitOrder,
     T: BitStore,
 {
-    encoding.append(&mut bitvec![1, 1, 0, 0, 0, 0, 0, 0, 0]);
+    encoding.append(&mut bitvec![Msb0, u8; 1, 1, 0, 0, 0, 0, 0, 0, 0]);
     let trailing_bits = encoding.len() % 8;
     if trailing_bits > 0 {
         for _ in 0..(8 - trailing_bits) {
