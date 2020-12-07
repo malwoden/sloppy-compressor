@@ -4,14 +4,14 @@ use std::convert::TryFrom;
 use std::io::BufWriter;
 use std::io::Write;
 
-use crate::lz77::nodes::Node;
+use crate::lz77::nodes::NodeType;
 
 const SEARCH_WINDOW_SIZE: u16 = 2048;
 const PREFIX_WINDOW_SIZE: u16 = 2048;
 
 pub fn build_lz77_node_list<C>(to_compress: &[u8], mut callback: C)
 where
-    C: FnMut(Node),
+    C: FnMut(NodeType),
 {
     let mut byte_ptr = 0;
 
@@ -29,10 +29,23 @@ where
         let search_slice = &to_compress[search_slice_start_index..search_slice_end_index];
         let prefix_slice = &to_compress[prefix_slice_start_index..prefix_slice_end_index];
 
-        let node = calculate_node(c, search_slice, prefix_slice);
-        byte_ptr += 1 + usize::from(node.length); // advance the byte pointer 1 past the position of char literal in the node
+        match calculate_reference_node(c, search_slice, prefix_slice) {
+            Some(NodeType::Reference { offset, length }) => {
+                byte_ptr += usize::from(length);
+                callback(NodeType::Reference { offset, length });
+            }
+            Some(_) => panic!("Only Refernce nodes should be returned"),
+            None => {}
+        }
 
-        callback(node);
+        if byte_ptr > to_compress.len() - 1 {
+            break;
+        }
+
+        callback(NodeType::ByteLiteral {
+            lit: to_compress[byte_ptr],
+        });
+        byte_ptr += 1;
 
         if byte_ptr > to_compress.len() - 1 {
             break;
@@ -40,11 +53,11 @@ where
     }
 }
 
-fn calculate_node(
+fn calculate_reference_node(
     first_uncompressed_byte: u8,
     compressed_bytes: &[u8],
     bytes_to_compressed: &[u8],
-) -> Node {
+) -> Option<NodeType> {
     let mut offset = 0;
     let mut length = 0;
 
@@ -73,26 +86,14 @@ fn calculate_node(
         }
     }
 
-    let next_char;
     if length == 0 {
-        // offset and length are 0 - this is a char literal node
-        next_char = first_uncompressed_byte;
-    } else {
-        if length > bytes_to_compressed.len() {
-            // we always need to have a char in the Node, but if we find a match up to the end of the
-            // right slice, we have no 'next' char to set. So we shorten the matched pattern by 1 char
-            // and set that final char as the next char for this node
-            length -= 1;
-        }
-
-        next_char = bytes_to_compressed[length - 1]
+        return Option::None::<NodeType>;
     }
 
-    Node {
+    Option::Some(NodeType::Reference {
         offset: u16::try_from(offset).unwrap(),
         length: u16::try_from(length).unwrap(),
-        char: next_char,
-    }
+    })
 }
 
 fn find_length_of_series_match(left: &[u8], right: &[u8]) -> usize {
@@ -106,23 +107,33 @@ fn find_length_of_series_match(left: &[u8], right: &[u8]) -> usize {
 }
 
 // need to keep the search window in memory, which means the length of it needs to be serialised.
-pub fn decompress_nodes<W: Write>(nodes: Vec<Node>, writer: &mut W) {
+pub fn decompress_nodes<W: Write>(nodes: Vec<NodeType>, writer: &mut W) {
     let mut search_buffer: WindowByteContainer<u8> =
         WindowByteContainer::new(usize::from(SEARCH_WINDOW_SIZE));
     let mut buffered_writer = BufWriter::new(writer);
 
     for node in nodes {
         let mut bytes_to_write = Vec::new();
-        if node.length > 0 {
-            // copy from the search buffer
-            let search_start_index = search_buffer.vec.len() - usize::from(node.offset);
-            let search_stop_index = search_start_index + usize::from(node.length);
-            let b = search_buffer
-                .vec
-                .range(search_start_index..search_stop_index);
-            bytes_to_write.extend(b);
-        }
-        bytes_to_write.push(node.char);
+
+        // TODO: might be nicer to have a slice returned and just append in a single location.
+        match node {
+            NodeType::ByteLiteral { lit } => {
+                bytes_to_write.push(lit);
+            }
+            NodeType::Reference { offset, length } => {
+                // copy from the search buffer
+                let search_start_index = search_buffer.vec.len() - usize::from(offset);
+                let search_stop_index = search_start_index + usize::from(length);
+                let b = search_buffer
+                    .vec
+                    .range(search_start_index..search_stop_index);
+                bytes_to_write.extend(b);
+            }
+            NodeType::EndOfStream => {
+                // Might not be needed here - might just be a serialisation thing
+            }
+        };
+
         buffered_writer
             .write_all(&bytes_to_write)
             .expect("Error during decompression");
@@ -142,32 +153,24 @@ mod tests {
         ];
 
         // (0,0,a), (0,0,b), (2,2,c), (4,3,a), (2,2,a)
-        let expected: Vec<Node> = vec![
-            Node {
-                offset: 0,
-                length: 0,
-                char: b'a',
-            },
-            Node {
-                offset: 0,
-                length: 0,
-                char: b'b',
-            },
-            Node {
+        let expected: Vec<NodeType> = vec![
+            NodeType::ByteLiteral { lit: b'a' },
+            NodeType::ByteLiteral { lit: b'b' },
+            NodeType::Reference {
                 offset: 2,
                 length: 2,
-                char: b'c',
             },
-            Node {
+            NodeType::ByteLiteral { lit: b'c' },
+            NodeType::Reference {
                 offset: 4,
                 length: 3,
-                char: b'a',
             },
-            Node {
+            NodeType::ByteLiteral { lit: b'a' },
+            NodeType::Reference {
                 offset: 2,
                 length: 2,
-                char: b'a',
             },
+            NodeType::ByteLiteral { lit: b'a' },
         ];
         let mut nodes = Vec::new();
         build_lz77_node_list(&bytes, |node| nodes.push(node));
@@ -186,7 +189,10 @@ mod tests {
         let mut nodes = Vec::new();
         build_lz77_node_list(&bytes, |node| nodes.push(node));
 
-        assert!(nodes.iter().all(|e| e.offset < 2048))
+        assert!(nodes.iter().all(|e| match e {
+            NodeType::Reference { length: _, offset } => *offset < 2048,
+            _ => true,
+        }));
     }
 
     #[test]
@@ -194,22 +200,14 @@ mod tests {
         let bytes = vec![b'a', b'b', b'a', b'b', b'b']; // D:
 
         // (0,0,a), (0,0,b), (2,2,b)
-        let expected: Vec<Node> = vec![
-            Node {
-                offset: 0,
-                length: 0,
-                char: b'a',
-            },
-            Node {
-                offset: 0,
-                length: 0,
-                char: b'b',
-            },
-            Node {
+        let expected: Vec<NodeType> = vec![
+            NodeType::ByteLiteral { lit: b'a' },
+            NodeType::ByteLiteral { lit: b'b' },
+            NodeType::Reference {
                 offset: 2,
                 length: 2,
-                char: b'b',
             },
+            NodeType::ByteLiteral { lit: b'b' },
         ];
         let mut nodes = Vec::new();
         build_lz77_node_list(&bytes, |node| nodes.push(node));

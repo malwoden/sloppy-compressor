@@ -4,39 +4,42 @@ use bitvec::prelude::*;
 
 use std::convert::TryFrom;
 
-use super::nodes::Node;
+use super::nodes::NodeType;
 
 const U16_BIT_SIZE: usize = size_of::<u16>() * 8;
 
-pub fn serailise_nodes(nodes: &Vec<Node>) -> BitVec<Msb0, u8> {
+pub fn serailise_nodes(nodes: &Vec<NodeType>) -> BitVec<Msb0, u8> {
     let mut vec = bitvec![Msb0, u8;];
     // Don't reserve here as a bug in bit-vec results in slower extend/append ops.
 
     for node in nodes {
-        if node.length > 0 {
-            // offset / length reference
-            vec.push(true);
-            let x = node.offset.view_bits::<Msb0>();
-            if node.offset < 128 {
-                vec.push(true);
-                for b in x[U16_BIT_SIZE - 7..].iter() {
-                    vec.push(*b);
-                }
-            } else {
+        match node {
+            NodeType::ByteLiteral { lit } => {
+                // literal byte - push '0' followed by 8 bits for the byte val
                 vec.push(false);
-                for b in x[U16_BIT_SIZE - 11..].iter() {
-                    vec.push(*b);
-                }
+                let literal = BitSlice::<Msb0, u8>::from_element(lit);
+                append_bitvecs(&mut vec, &literal.to_bitvec());
             }
-
-            let length_encoded = serialise_length(node.length);
-            append_bitvecs(&mut vec, &length_encoded);
-        } else {
-            // literal byte - push '0' followed by 8 bits for the byte val
-            vec.push(false);
+            NodeType::Reference { offset, length } => {
+                // offset / length reference
+                vec.push(true);
+                let x = offset.view_bits::<Msb0>();
+                if *offset < 128 {
+                    vec.push(true);
+                    for b in x[U16_BIT_SIZE - 7..].iter() {
+                        vec.push(*b);
+                    }
+                } else {
+                    vec.push(false);
+                    for b in x[U16_BIT_SIZE - 11..].iter() {
+                        vec.push(*b);
+                    }
+                }
+                let length_encoded = serialise_length(*length);
+                append_bitvecs(&mut vec, &length_encoded);
+            }
+            NodeType::EndOfStream => {}
         }
-        let literal = BitSlice::<Msb0, u8>::from_element(&node.char);
-        append_bitvecs(&mut vec, &literal.to_bitvec());
     }
 
     vec
@@ -69,10 +72,10 @@ fn serialise_length(length: u16) -> BitVec<Msb0, u8> {
     };
 }
 
-pub fn deserialise_nodes(file_bytes: Vec<u8>) -> Vec<Node> {
+pub fn deserialise_nodes(file_bytes: Vec<u8>) -> Vec<NodeType> {
     let end_of_stream_marker = bits![Msb0, u8; 1, 1, 0, 0, 0, 0, 0, 0, 0];
 
-    let mut nodes: Vec<Node> = vec![];
+    let mut nodes: Vec<NodeType> = vec![];
     let bit_view = file_bytes.view_bits::<Msb0>();
 
     let mut bitstream_offset = 0;
@@ -83,10 +86,8 @@ pub fn deserialise_nodes(file_bytes: Vec<u8>) -> Vec<Node> {
         if !is_reference_node {
             // next 8 bits will be a literal byte node
             let byte_literal = &bit_view[bitstream_offset..bitstream_offset + 8];
-            nodes.push(Node {
-                length: 0,
-                offset: 0,
-                char: slice_to_byte(&byte_literal),
+            nodes.push(NodeType::ByteLiteral {
+                lit: slice_to_byte(&byte_literal),
             });
             bitstream_offset += 8;
         } else {
@@ -108,14 +109,7 @@ pub fn deserialise_nodes(file_bytes: Vec<u8>) -> Vec<Node> {
             let (length, bits_read) = deserialise_length(&bit_view[bitstream_offset..]);
             bitstream_offset += usize::from(bits_read);
 
-            // next 8 bits will be a literal byte node
-            let byte_literal = &bit_view[bitstream_offset..bitstream_offset + 8];
-            nodes.push(Node {
-                length,
-                offset,
-                char: slice_to_byte(&byte_literal),
-            });
-            bitstream_offset += 8;
+            nodes.push(NodeType::Reference { length, offset });
         }
 
         if bit_view[bitstream_offset..bitstream_offset + 9] == end_of_stream_marker {
@@ -238,22 +232,14 @@ mod tests {
 
     #[test]
     fn serailise_nodes_handles_literals_and_refs() {
-        let nodes: Vec<Node> = vec![
-            Node {
-                offset: 0,
-                length: 0,
-                char: b'a',
-            },
-            Node {
-                offset: 0,
-                length: 0,
-                char: b'b',
-            },
-            Node {
+        let nodes: Vec<NodeType> = vec![
+            NodeType::ByteLiteral { lit: b'a' },
+            NodeType::ByteLiteral { lit: b'b' },
+            NodeType::Reference {
                 offset: 2,
                 length: 2,
-                char: b'b',
             },
+            NodeType::ByteLiteral { lit: b'b' },
         ];
         // 0 01100001 0 01100010 11 0000010 00 01100010
         // 0 = char lit
@@ -265,32 +251,36 @@ mod tests {
         // last 8 bits are the char literal 'b'
         let expected = bitvec![
             0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0,
-            0, 1, 1, 0, 0, 0, 1, 0,
+            0, 0, 1, 1, 0, 0, 0, 1, 0,
         ];
         assert_eq!(expected, serailise_nodes(&nodes));
     }
 
     #[test]
     fn serailise_nodes_large_lengths() {
-        let nodes = vec![Node {
-            offset: 17,
-            length: 8,
-            char: b'a',
-        }];
+        let nodes = vec![
+            NodeType::Reference {
+                offset: 17,
+                length: 8,
+            },
+            NodeType::ByteLiteral { lit: b'a' },
+        ];
         assert_eq!(
-            bitvec![1, 1, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1],
+            bitvec![1, 1, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1],
             serailise_nodes(&nodes)
         );
 
-        let nodes = vec![Node {
-            offset: 17,
-            length: 24,
-            char: b'a',
-        }];
+        let nodes = vec![
+            NodeType::Reference {
+                offset: 17,
+                length: 24,
+            },
+            NodeType::ByteLiteral { lit: b'a' },
+        ];
         assert_eq!(
             bitvec![
-                1, 1, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0,
-                1
+                1, 1, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0,
+                0, 1
             ],
             serailise_nodes(&nodes)
         );
@@ -301,21 +291,9 @@ mod tests {
         // Q: What is most efficient: 3 raw bytes or 1 raw byte and a 2 byte-len node ref?
 
         let three_raw_bytes = vec![
-            Node {
-                offset: 0,
-                length: 0,
-                char: b'a',
-            },
-            Node {
-                offset: 0,
-                length: 0,
-                char: b'a',
-            },
-            Node {
-                offset: 0,
-                length: 0,
-                char: b'a',
-            },
+            NodeType::ByteLiteral { lit: b'a' },
+            NodeType::ByteLiteral { lit: b'a' },
+            NodeType::ByteLiteral { lit: b'a' },
         ];
         assert_eq!(
             bitvec![
@@ -324,13 +302,15 @@ mod tests {
             serailise_nodes(&three_raw_bytes)
         );
 
-        let two_length_node_ref = vec![Node {
-            offset: 2,
-            length: 2,
-            char: b'a',
-        }];
+        let two_length_node_ref = vec![
+            NodeType::Reference {
+                offset: 2,
+                length: 2,
+            },
+            NodeType::ByteLiteral { lit: b'a' },
+        ];
         assert_eq!(
-            bitvec![1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1,],
+            bitvec![1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1,],
             serailise_nodes(&two_length_node_ref)
         );
 
@@ -408,21 +388,12 @@ mod tests {
 
     #[test]
     fn serialise_and_deserialise_nodes() {
-        let nodes: Vec<Node> = vec![
-            Node {
-                offset: 0,
-                length: 0,
-                char: b'a',
-            },
-            Node {
-                offset: 0,
-                length: 0,
-                char: b'b',
-            },
-            Node {
+        let nodes: Vec<NodeType> = vec![
+            NodeType::ByteLiteral { lit: b'a' },
+            NodeType::ByteLiteral { lit: b'b' },
+            NodeType::Reference {
                 offset: 2,
                 length: 2,
-                char: b'b',
             },
         ];
         let mut serialised = serailise_nodes(&nodes);

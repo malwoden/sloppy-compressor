@@ -40,7 +40,7 @@ impl compression::Algorithm for Lz77Compression {
 
 #[cfg(test)]
 mod tests {
-    use crate::{compression::Algorithm, lz77::nodes::Node};
+    use crate::{compression::Algorithm, lz77::nodes::NodeType};
     use std::path::PathBuf;
 
     use super::*;
@@ -52,32 +52,24 @@ mod tests {
         ];
 
         // (0,0,a), (0,0,b), (2,2,c), (4,3,a), (2,2,a)
-        let expected: Vec<Node> = vec![
-            Node {
-                offset: 0,
-                length: 0,
-                char: b'a',
-            },
-            Node {
-                offset: 0,
-                length: 0,
-                char: b'b',
-            },
-            Node {
-                offset: 2,
+        let expected: Vec<NodeType> = vec![
+            NodeType::ByteLiteral { lit: b'a' },
+            NodeType::ByteLiteral { lit: b'b' },
+            NodeType::Reference {
                 length: 2,
-                char: b'c',
+                offset: 2,
             },
-            Node {
-                offset: 4,
+            NodeType::ByteLiteral { lit: b'c' },
+            NodeType::Reference {
                 length: 3,
-                char: b'a',
+                offset: 4,
             },
-            Node {
-                offset: 2,
+            NodeType::ByteLiteral { lit: b'a' },
+            NodeType::Reference {
                 length: 2,
-                char: b'a',
+                offset: 2,
             },
+            NodeType::ByteLiteral { lit: b'a' },
         ];
         let mut nodes = Vec::new();
         compress::build_lz77_node_list(&bytes, |node| nodes.push(node));
