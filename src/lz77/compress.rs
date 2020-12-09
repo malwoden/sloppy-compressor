@@ -124,9 +124,7 @@ pub fn decompress_nodes<W: Write>(nodes: Vec<NodeType>, writer: &mut W) {
                 // copy from the search buffer
                 let search_start_index = search_buffer.vec.len() - usize::from(offset);
                 let search_stop_index = search_start_index + usize::from(length);
-                let b = search_buffer
-                    .vec
-                    .range(search_start_index..search_stop_index);
+                let b = &search_buffer.vec[search_start_index..search_stop_index];
                 bytes_to_write.extend(b);
             }
             NodeType::EndOfStream => {

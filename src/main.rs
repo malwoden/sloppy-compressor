@@ -1,5 +1,3 @@
-#![feature(deque_range)]
-
 use std::{env, fs::File, io};
 
 use sloppycomp::block_compress;
