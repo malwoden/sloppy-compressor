@@ -72,7 +72,7 @@ fn serialise_length(length: u16) -> BitVec<Msb0, u8> {
     };
 }
 
-pub fn deserialise_nodes(file_bytes: Vec<u8>) -> Vec<NodeType> {
+pub fn deserialise_nodes(file_bytes: &Vec<u8>) -> Vec<NodeType> {
     let end_of_stream_marker = bits![Msb0, u8; 1, 1, 0, 0, 0, 0, 0, 0, 0];
 
     let mut nodes: Vec<NodeType> = vec![];
@@ -398,7 +398,7 @@ mod tests {
         ];
         let mut serialised = serailise_nodes(&nodes);
         append_end_marker(&mut serialised);
-        let deserialised = deserialise_nodes(serialised.into());
+        let deserialised = deserialise_nodes(&serialised.into());
         assert_eq!(nodes, deserialised);
     }
 }

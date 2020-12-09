@@ -16,8 +16,25 @@ impl compression::Algorithm for Lz77Compression {
         file.read_to_end(&mut file_bytes)
             .expect("Error on file read");
 
+        self.compress_bytes(&file_bytes, output_file_path)
+    }
+
+    fn decompress(&self, mut compressed_file: File, output_file_path: &str) -> io::Result<()> {
+        let mut file_bytes: Vec<u8> = vec![];
+        compressed_file.read_to_end(&mut file_bytes)?;
+
+        let nodes = serialisation::deserialise_nodes(&file_bytes);
+
+        let mut file = File::create(output_file_path)?;
+        compress::decompress_nodes(nodes, &mut file);
+        Ok(())
+    }
+}
+
+impl Lz77Compression {
+    pub fn compress_bytes(&self, file_bytes: &[u8], output_file_path: &str) -> io::Result<()> {
         let mut nodes = Vec::new();
-        compress::build_lz77_node_list(&file_bytes, |node| nodes.push(node));
+        compress::build_lz77_node_list(file_bytes, |node| nodes.push(node));
 
         let mut encoded_nodes = serialisation::serailise_nodes(&nodes);
         serialisation::append_end_marker(&mut encoded_nodes);
@@ -26,11 +43,12 @@ impl compression::Algorithm for Lz77Compression {
         compression::write_to_new_file(&bv, output_file_path)
     }
 
-    fn decompress(&self, mut compressed_file: File, output_file_path: &str) -> io::Result<()> {
-        let mut file_bytes: Vec<u8> = vec![];
-        compressed_file.read_to_end(&mut file_bytes)?;
-
-        let nodes = serialisation::deserialise_nodes(file_bytes);
+    pub fn decompress_bytes(
+        &self,
+        compressed_bytes: &Vec<u8>,
+        output_file_path: &str,
+    ) -> io::Result<()> {
+        let nodes = serialisation::deserialise_nodes(compressed_bytes);
 
         let mut file = File::create(output_file_path)?;
         compress::decompress_nodes(nodes, &mut file);
@@ -78,18 +96,5 @@ mod tests {
         let mut write_vec: Vec<u8> = Vec::new();
         compress::decompress_nodes(nodes, &mut write_vec);
         assert_eq!(write_vec, bytes);
-    }
-
-    #[test]
-    fn writes_compressed_file() {
-        // a bad test - but will help catch some clear errors whilst under dev
-        let mut input_file = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let mut output_file = input_file.clone();
-        input_file.push("src/bitvec_issues.rs");
-        output_file.push("src/bitvec_issues.rs.testout");
-
-        let f = File::open(input_file).unwrap();
-        let c = Lz77Compression {};
-        c.compress(f, output_file.to_str().unwrap()).unwrap();
     }
 }
