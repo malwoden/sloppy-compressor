@@ -58,9 +58,7 @@ impl Lz77Compression {
 
 #[cfg(test)]
 mod tests {
-    use crate::{compression::Algorithm, lz77::nodes::NodeType};
-    use std::path::PathBuf;
-
+    use crate::lz77::nodes::NodeType;
     use super::*;
 
     #[test]
