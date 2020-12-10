@@ -29,9 +29,9 @@ impl<T: std::marker::Copy> ByteBuffer<T> {
 
 #[derive(PartialEq, Debug)]
 pub struct ByteWindowAdvance<'a> {
-    evicted: &'a [u8],
-    admitted: &'a [u8],
-    window: &'a [u8],
+    pub evicted: &'a [u8],
+    pub admitted: &'a [u8],
+    pub window: &'a [u8],
 }
 
 /// Wrapper for a window view over a byte slice
@@ -58,6 +58,7 @@ impl<'a> ByteWindow<'a> {
     ///
     /// Returned struct contains the bytes that were evicted and admitted from/to the window.
     /// ```
+    /// use sloppycomp::lz77::window_byte_container::{ByteWindow, ByteWindowAdvance};
     /// let bytes = [b'b', b'c', b'd', b'e'];
     /// let mut byte_window = ByteWindow::with_max_window_size(&bytes, 2);
     /// let advancement = byte_window.advance(1);
@@ -74,25 +75,29 @@ impl<'a> ByteWindow<'a> {
     /// It is possible for the same byte to be emitted and evicted in a single operation
     /// if the count exceeds the max_window_size of the ByteWindow.
     /// ```
-    ///let bytes = [b'b', b'c', b'd', b'e'];
-    ///let mut byte_window = ByteWindow::with_max_window_size(&bytes, 2);
+    /// use sloppycomp::lz77::window_byte_container::{ByteWindow, ByteWindowAdvance};
+    /// let bytes = [b'b', b'c', b'd', b'e'];
+    /// let mut byte_window = ByteWindow::with_max_window_size(&bytes, 2);
     ///
-    ///let door = byte_window.advance(5);
-    ///assert_eq!(
-    ///    ByteWindowAdvance {
-    ///        evicted: &[b'b', b'c', b'd'],
-    ///        admitted: &[b'b', b'c', b'd', b'e'],
-    ///        window: &[b'e']
-    ///    },
-    ///    door
-    ///);
+    /// let door = byte_window.advance(5);
+    /// assert_eq!(
+    ///     ByteWindowAdvance {
+    ///         evicted: &[b'b', b'c', b'd'],
+    ///         admitted: &[b'b', b'c', b'd', b'e'],
+    ///         window: &[b'e']
+    ///     },
+    ///     door
+    /// );
     /// ```
     pub fn advance(&mut self, count: usize) -> ByteWindowAdvance<'a> {
         let new_pointer = self.current_index + count;
+        self.advance_to_pointer(new_pointer)
+    }
 
-        let new_start_index = new_pointer.saturating_sub(self.max_window_size);
+    pub fn advance_to_pointer(&mut self, pointer: usize) -> ByteWindowAdvance<'a> {
+        let new_start_index = pointer.saturating_sub(self.max_window_size);
         let old_start_index = self.current_index.saturating_sub(self.max_window_size);
-        let end_index = cmp::min(self.bytes.len(), new_pointer);
+        let end_index = cmp::min(self.bytes.len(), pointer);
 
         let window = if new_start_index < end_index {
             &self.bytes[new_start_index..end_index]
@@ -112,7 +117,7 @@ impl<'a> ByteWindow<'a> {
             &[]
         };
 
-        self.current_index += count;
+        self.current_index = pointer;
 
         ByteWindowAdvance {
             evicted,
@@ -183,6 +188,23 @@ mod byte_window_tests {
             door
         );
         assert_eq!([b'e'], byte_window.window());
+    }
+
+    #[test]
+    fn advance_to_pointer() {
+        let bytes = [b'b', b'c', b'd', b'e'];
+        let mut byte_window = ByteWindow::with_max_window_size(&bytes, 2);
+
+        let door = byte_window.advance_to_pointer(3);
+        assert_eq!(
+            ByteWindowAdvance {
+                evicted: &[b'b'],
+                admitted: &[b'b', b'c', b'd'],
+                window: &[b'c', b'd']
+            },
+            door
+        );
+        assert_eq!([b'c', b'd'], byte_window.window());
     }
 
     fn assert_window_advance(

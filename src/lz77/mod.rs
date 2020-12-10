@@ -6,7 +6,7 @@ use crate::compression;
 mod compress;
 mod nodes;
 mod serialisation;
-mod window_byte_container;
+pub mod window_byte_container;
 
 pub struct Lz77Compression {}
 

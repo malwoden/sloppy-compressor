@@ -5,8 +5,9 @@ use std::io::BufWriter;
 use std::io::Write;
 
 use crate::lz77::nodes::NodeType;
+use crate::lz77::window_byte_container::ByteWindow;
 
-const SEARCH_WINDOW_SIZE: u16 = 2048;
+const SEARCH_WINDOW_SIZE: u16 = 2047;
 const PREFIX_WINDOW_SIZE: u16 = 2048;
 
 pub fn build_lz77_node_list<C>(to_compress: &[u8], mut callback: C)
@@ -15,19 +16,17 @@ where
 {
     let mut byte_ptr = 0;
 
+    let mut search_window =
+        ByteWindow::with_max_window_size(to_compress, usize::from(SEARCH_WINDOW_SIZE));
+    let mut prefix_window =
+        ByteWindow::with_max_window_size(to_compress, usize::from(PREFIX_WINDOW_SIZE));
+
     loop {
         let c = to_compress[byte_ptr];
-        let search_slice_start_index = byte_ptr.saturating_sub(usize::from(SEARCH_WINDOW_SIZE) - 1);
-        let search_slice_end_index = byte_ptr;
-
-        let prefix_slice_start_index = byte_ptr + 1;
-        let prefix_slice_end_index = cmp::min(
-            byte_ptr.saturating_add(usize::from(PREFIX_WINDOW_SIZE)),
-            to_compress.len(),
-        );
-
-        let search_slice = &to_compress[search_slice_start_index..search_slice_end_index];
-        let prefix_slice = &to_compress[prefix_slice_start_index..prefix_slice_end_index];
+        let search_slice = search_window.advance_to_pointer(byte_ptr).window;
+        let prefix_slice = prefix_window
+            .advance_to_pointer(byte_ptr + usize::from(PREFIX_WINDOW_SIZE) + 1)
+            .window;
 
         match calculate_reference_node(c, search_slice, prefix_slice) {
             Some(NodeType::Reference { offset, length }) => {
