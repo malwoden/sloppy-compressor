@@ -58,8 +58,8 @@ impl Lz77Compression {
 
 #[cfg(test)]
 mod tests {
-    use crate::lz77::nodes::NodeType;
     use super::*;
+    use crate::lz77::nodes::NodeType;
 
     #[test]
     fn decompresses_to_original_bytes() {

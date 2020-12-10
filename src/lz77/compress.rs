@@ -1,4 +1,4 @@
-use crate::lz77::window_byte_container::WindowByteContainer;
+use crate::lz77::window_byte_container::ByteBuffer;
 use std::cmp;
 use std::convert::TryFrom;
 use std::io::BufWriter;
@@ -108,8 +108,7 @@ fn find_length_of_series_match(left: &[u8], right: &[u8]) -> usize {
 
 // need to keep the search window in memory, which means the length of it needs to be serialised.
 pub fn decompress_nodes<W: Write>(nodes: Vec<NodeType>, writer: &mut W) {
-    let mut search_buffer: WindowByteContainer<u8> =
-        WindowByteContainer::new(usize::from(SEARCH_WINDOW_SIZE));
+    let mut search_buffer: ByteBuffer<u8> = ByteBuffer::new(usize::from(SEARCH_WINDOW_SIZE));
     let mut buffered_writer = BufWriter::new(writer);
 
     for node in nodes {

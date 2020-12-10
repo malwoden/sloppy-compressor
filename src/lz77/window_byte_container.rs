@@ -1,13 +1,16 @@
 /// A fixed sized container that pops old elements as new ones arrive
 #[derive(PartialEq, Debug)]
-pub struct WindowByteContainer<T> {
+pub struct ByteBuffer<T> {
     pub vec: Vec<T>,
     limit: usize,
 }
 
-impl<T: std::marker::Copy> WindowByteContainer<T> {
-    pub fn new(limit: usize) -> WindowByteContainer<T> {
-        WindowByteContainer {
+impl<T: std::marker::Copy> ByteBuffer<T> {
+    // Potential improvements: Use a circular buffer instead, and use a chained iterator when
+    // we need to return wrapped segments. Would save on allocations and moves.
+    // Performance of swapping direct slice loops with an iter would have to be checked.
+    pub fn new(limit: usize) -> ByteBuffer<T> {
+        ByteBuffer {
             vec: Vec::with_capacity(limit),
             limit,
         }
@@ -28,7 +31,7 @@ mod tests {
 
     #[test]
     fn push_all() {
-        let mut search_buffer: WindowByteContainer<u8> = WindowByteContainer::new(4);
+        let mut search_buffer: ByteBuffer<u8> = ByteBuffer::new(4);
         search_buffer.push_all(&[b'a']);
         search_buffer.push_all(&[b'b', b'c', b'd', b'e']);
 

@@ -16,7 +16,9 @@ fn test_compression_size() {
     let compressor = lz77::Lz77Compression {};
     compressor.compress(file, "/tmp/sloppycomp-ratio-test");
 
-    let compressed_size = std::fs::metadata("/tmp/sloppycomp-ratio-test").unwrap().len();
+    let compressed_size = std::fs::metadata("/tmp/sloppycomp-ratio-test")
+        .unwrap()
+        .len();
 
     assert_eq!(18336826, compressed_size);
 }
