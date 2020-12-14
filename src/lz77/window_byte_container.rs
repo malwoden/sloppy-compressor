@@ -221,6 +221,7 @@ impl<'a> IndexableByteWindow<'a> {
             .current_index
             .saturating_sub(self.window.max_window_size);
 
+        #[cfg(debug_assertions)]
         if location > self.window.current_index || location < offset {
             panic!("Location must be indexable within the current visible window");
         }
