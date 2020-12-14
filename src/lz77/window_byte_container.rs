@@ -1,6 +1,7 @@
 use std::{
     cmp,
     collections::{HashMap, VecDeque},
+    hash::{BuildHasherDefault, Hasher},
 };
 
 /// A fixed sized container that pops old elements as new ones arrive
@@ -151,14 +152,18 @@ impl<'a> ByteWindow<'a> {
 #[derive(PartialEq, Debug)]
 pub struct IndexableByteWindow<'a> {
     window: ByteWindow<'a>,
-    byte_locations: HashMap<u8, VecDeque<usize>>,
+    byte_locations: HashMap<u8, VecDeque<usize>, U8HasherBuilder>,
 }
 
 impl<'a> IndexableByteWindow<'a> {
     pub fn with_max_window_size(bytes: &'a [u8], max_window_size: usize) -> Self {
         IndexableByteWindow {
             window: ByteWindow::with_max_window_size(bytes, max_window_size),
-            byte_locations: HashMap::new(),
+            byte_locations:
+                HashMap::<u8, VecDeque<usize>, U8HasherBuilder>::with_capacity_and_hasher(
+                    256,
+                    U8HasherBuilder::default(),
+                ),
         }
     }
 
@@ -204,7 +209,7 @@ impl<'a> IndexableByteWindow<'a> {
     }
 
     /// Returns a collection of byte values to their known location within the byte slice.
-    pub fn byte_locations(&self) -> &HashMap<u8, VecDeque<usize>> {
+    pub fn byte_locations(&self) -> &HashMap<u8, VecDeque<usize>, U8HasherBuilder> {
         &self.byte_locations
     }
 
@@ -222,6 +227,24 @@ impl<'a> IndexableByteWindow<'a> {
         location - offset
     }
 }
+
+// Custom hasher optimised for the u8 keys of the IndexableByteWindow's map.
+#[derive(Default)]
+pub struct U8Hasher {
+    hash: u8,
+}
+
+impl Hasher for U8Hasher {
+    fn finish(&self) -> u64 {
+        u64::from(self.hash)
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        self.hash = bytes[0]
+    }
+}
+
+type U8HasherBuilder = BuildHasherDefault<U8Hasher>;
 
 #[cfg(test)]
 mod tests {
