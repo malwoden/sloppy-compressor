@@ -1,4 +1,7 @@
-use std::cmp;
+use std::{
+    cmp,
+    collections::{HashMap, VecDeque},
+};
 
 /// A fixed sized container that pops old elements as new ones arrive
 #[derive(PartialEq, Debug)]
@@ -33,6 +36,8 @@ pub struct ByteWindowAdvance<'a> {
     pub admitted: &'a [u8],
     pub window: &'a [u8],
 }
+
+// Maybe add an implementation for converting to a &[u8]?
 
 /// Wrapper for a window view over a byte slice
 #[derive(PartialEq, Debug)]
@@ -127,7 +132,6 @@ impl<'a> ByteWindow<'a> {
     }
 
     pub fn window(&self) -> &'a [u8] {
-        // should advancement past the end iter really be allowed?
         let start_index = self.current_index.saturating_sub(self.max_window_size);
         let end_index = cmp::min(self.bytes.len(), self.current_index);
         if start_index < self.bytes.len() {
@@ -135,6 +139,87 @@ impl<'a> ByteWindow<'a> {
         } else {
             &[]
         }
+    }
+}
+
+/// ByteWindow that also tracks the locations of each byte in an O(1) lookup
+///
+/// After every admission and eviction the internal hashmap of byte values to indexes
+/// is updated. Note that the indexes stored in this location are not restricted to the
+/// visible byte window, they are global across the whole original byte slice.
+/// This means we don't have to update values in the collection as we slide the window.
+#[derive(PartialEq, Debug)]
+pub struct IndexableByteWindow<'a> {
+    window: ByteWindow<'a>,
+    byte_locations: HashMap<u8, VecDeque<usize>>,
+}
+
+impl<'a> IndexableByteWindow<'a> {
+    pub fn with_max_window_size(bytes: &'a [u8], max_window_size: usize) -> Self {
+        IndexableByteWindow {
+            window: ByteWindow::with_max_window_size(bytes, max_window_size),
+            byte_locations: HashMap::new(),
+        }
+    }
+
+    pub fn advance(&mut self, count: usize) -> ByteWindowAdvance<'a> {
+        let result = self.window.advance(count);
+        self.update_byte_location_table(
+            result.admitted,
+            self.window.current_index - count,
+            result.evicted,
+        );
+        result
+    }
+
+    pub fn advance_to_pointer(&mut self, pointer: usize) -> ByteWindowAdvance<'a> {
+        self.advance(pointer - self.window.current_index)
+    }
+
+    pub fn window(&self) -> &'a [u8] {
+        self.window.window()
+    }
+
+    fn update_byte_location_table(
+        &mut self,
+        admitted: &[u8],
+        admission_offset: usize,
+        evicted: &[u8],
+    ) {
+        admitted.iter().enumerate().for_each(|(i, u)| {
+            self.byte_locations
+                .entry(*u)
+                .or_default()
+                .push_back(i + admission_offset);
+        });
+
+        evicted.iter().for_each(|u| {
+            // we are moving through the slice from lowest index first, so we know
+            // that if we are removing an element from a given key, the element to
+            // remove must be first in the deque.
+            self.byte_locations.entry(*u).and_modify(|v| {
+                v.pop_front();
+            });
+        });
+    }
+
+    /// Returns a collection of byte values to their known location within the byte slice.
+    pub fn byte_locations(&self) -> &HashMap<u8, VecDeque<usize>> {
+        &self.byte_locations
+    }
+
+    /// Translates a location within the byte slice to a location within the
+    /// current visible window.
+    pub fn location_to_window_index(&self, location: usize) -> usize {
+        let offset = self
+            .window
+            .current_index
+            .saturating_sub(self.window.max_window_size);
+
+        if location > self.window.current_index || location < offset {
+            panic!("Location must be indexable within the current visible window");
+        }
+        location - offset
     }
 }
 
@@ -188,6 +273,32 @@ mod byte_window_tests {
             door
         );
         assert_eq!([b'e'], byte_window.window());
+    }
+
+    #[test]
+    fn advance_past_end_of_window_byte_locations() {
+        let bytes = [b'b', b'c', b'd', b'e'];
+        let mut byte_window = IndexableByteWindow::with_max_window_size(&bytes, 2);
+
+        byte_window.advance(5);
+
+        assert_eq!(
+            byte_window.byte_locations().get(&b'e').unwrap().as_slices(),
+            (&[3][..], &[][..])
+        );
+    }
+
+    #[test]
+    fn location_to_window_index() {
+        let bytes = [b'b', b'c', b'd', b'e'];
+        let mut byte_window = IndexableByteWindow::with_max_window_size(&bytes, 2);
+
+        assert_eq!(0, byte_window.location_to_window_index(0));
+
+        byte_window.advance(4);
+
+        assert_eq!(0, byte_window.location_to_window_index(2));
+        assert_eq!(1, byte_window.location_to_window_index(3));
     }
 
     #[test]

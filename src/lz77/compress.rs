@@ -7,6 +7,8 @@ use std::io::Write;
 use crate::lz77::nodes::NodeType;
 use crate::lz77::window_byte_container::ByteWindow;
 
+use super::window_byte_container::IndexableByteWindow;
+
 const SEARCH_WINDOW_SIZE: u16 = 2047;
 const PREFIX_WINDOW_SIZE: u16 = 2048;
 
@@ -17,27 +19,23 @@ where
     let mut byte_ptr = 0;
 
     let mut search_window =
-        ByteWindow::with_max_window_size(to_compress, usize::from(SEARCH_WINDOW_SIZE));
+        IndexableByteWindow::with_max_window_size(to_compress, usize::from(SEARCH_WINDOW_SIZE));
     let mut prefix_window =
         ByteWindow::with_max_window_size(to_compress, usize::from(PREFIX_WINDOW_SIZE));
 
     loop {
         let c = to_compress[byte_ptr];
-        let search_slice = search_window.advance_to_pointer(byte_ptr).window;
-        let prefix_slice = prefix_window
-            .advance_to_pointer(byte_ptr + usize::from(PREFIX_WINDOW_SIZE) + 1)
-            .window;
+        search_window.advance_to_pointer(byte_ptr);
+        prefix_window.advance_to_pointer(byte_ptr + usize::from(PREFIX_WINDOW_SIZE) + 1);
 
-        match calculate_reference_node(c, search_slice, prefix_slice) {
+        match calculate_reference_node(c, &search_window, &prefix_window) {
             Some(NodeType::Reference { offset, length }) => {
                 byte_ptr += usize::from(length);
                 callback(NodeType::Reference { offset, length });
             }
             Some(_) => panic!("Only Refernce nodes should be returned"),
             None => {
-                callback(NodeType::ByteLiteral {
-                    lit: c,
-                });
+                callback(NodeType::ByteLiteral { lit: c });
                 byte_ptr += 1;
             }
         }
@@ -50,8 +48,8 @@ where
 
 fn calculate_reference_node(
     first_uncompressed_byte: u8,
-    compressed_bytes: &[u8],
-    bytes_to_compressed: &[u8],
+    search_window: &IndexableByteWindow,
+    bytes_to_compressed: &ByteWindow,
 ) -> Option<NodeType> {
     let mut offset = 0;
     let mut length = 0;
@@ -60,24 +58,27 @@ fn calculate_reference_node(
     // reverse iterate from the end of the compressed bytes, find a matching byte, then
     // moving forward through the compressed bytes and the bytes to be compressed, find the
     // longest matching sequence.
+    // Moving from back to front is preferable as it will result in a smaller offset value
+    // and has potential use in the future for the search window length extending into the
+    // uncompressed bytes (to represend repeating blocks).
+    let compressed_bytes = search_window.window();
+    let bytes_to_compressed = bytes_to_compressed.window();
     if compressed_bytes.len() > 0 {
-        let start = compressed_bytes.len() - 1;
-        let mut i = start;
+        let byte_locations = search_window.byte_locations().get(&first_uncompressed_byte);
 
-        loop {
-            if first_uncompressed_byte == compressed_bytes[i] {
-                let series_match =
-                    find_length_of_series_match(&compressed_bytes[i + 1..], bytes_to_compressed);
+        if let Some(byte_locations) = &byte_locations {
+            for location in byte_locations.iter().rev() {
+                let local_location = search_window.location_to_window_index(*location);
+
+                let series_match = find_length_of_series_match(
+                    &compressed_bytes[local_location + 1..],
+                    bytes_to_compressed,
+                );
                 if series_match > length {
-                    offset = compressed_bytes.len() - i;
+                    offset = search_window.window().len() - local_location;
                     length = series_match + 1; // + 1 to include the 'first_uncompressed_byte' char
                 }
             }
-
-            if i == 0 {
-                break;
-            }
-            i -= 1;
         }
     }
 
@@ -162,7 +163,7 @@ mod tests {
                 length: 2,
             },
             NodeType::ByteLiteral { lit: b'a' },
-            NodeType::ByteLiteral { lit: b'a' }
+            NodeType::ByteLiteral { lit: b'a' },
         ];
         let mut nodes = Vec::new();
         build_lz77_node_list(&bytes, |node| nodes.push(node));
