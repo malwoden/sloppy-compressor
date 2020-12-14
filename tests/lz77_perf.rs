@@ -20,5 +20,5 @@ fn test_compression_size() {
         .unwrap()
         .len();
 
-    assert_eq!(18336826, compressed_size);
+    assert_eq!(16143356, compressed_size);
 }
