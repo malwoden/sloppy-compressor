@@ -34,17 +34,13 @@ where
                 callback(NodeType::Reference { offset, length });
             }
             Some(_) => panic!("Only Refernce nodes should be returned"),
-            None => {}
+            None => {
+                callback(NodeType::ByteLiteral {
+                    lit: c,
+                });
+                byte_ptr += 1;
+            }
         }
-
-        if byte_ptr > to_compress.len() - 1 {
-            break;
-        }
-
-        callback(NodeType::ByteLiteral {
-            lit: to_compress[byte_ptr],
-        });
-        byte_ptr += 1;
 
         if byte_ptr > to_compress.len() - 1 {
             break;
@@ -161,12 +157,12 @@ mod tests {
                 offset: 4,
                 length: 3,
             },
-            NodeType::ByteLiteral { lit: b'a' },
             NodeType::Reference {
                 offset: 2,
                 length: 2,
             },
             NodeType::ByteLiteral { lit: b'a' },
+            NodeType::ByteLiteral { lit: b'a' }
         ];
         let mut nodes = Vec::new();
         build_lz77_node_list(&bytes, |node| nodes.push(node));

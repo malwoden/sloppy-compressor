@@ -72,20 +72,20 @@ mod tests {
             NodeType::ByteLiteral { lit: b'a' },
             NodeType::ByteLiteral { lit: b'b' },
             NodeType::Reference {
-                length: 2,
                 offset: 2,
+                length: 2,
             },
             NodeType::ByteLiteral { lit: b'c' },
             NodeType::Reference {
-                length: 3,
                 offset: 4,
+                length: 3,
             },
-            NodeType::ByteLiteral { lit: b'a' },
             NodeType::Reference {
-                length: 2,
                 offset: 2,
+                length: 2,
             },
             NodeType::ByteLiteral { lit: b'a' },
+            NodeType::ByteLiteral { lit: b'a' }
         ];
         let mut nodes = Vec::new();
         compress::build_lz77_node_list(&bytes, |node| nodes.push(node));
