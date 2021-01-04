@@ -220,10 +220,7 @@ where
     O: BitOrder,
     T: BitStore,
 {
-    for b in to_add.iter() {
-        original.push(*b);
-    }
-    // dont use append/extend as they vastly slower: https://github.com/myrrlyn/bitvec/issues/94
+    original.extend_from_bitslice(to_add);
 }
 
 #[cfg(test)]
