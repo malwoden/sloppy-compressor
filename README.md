@@ -47,6 +47,18 @@ Criterion benchmarks can be run using
 
 `cargo bench`
 
+Once you pull master, save some benchmarks:
+
+`cargo bench --bench lz77_benchmarks -- --save-baseline master`
+
+Once you have made some code changes, check them against that saved baseline:
+
+`cargo bench --bench lz77_benchmarks -- --baseline master`
+
+If you are happy with the changes, save the new master as the baseline, ready for future changes:
+
+`cargo bench --bench lz77_benchmarks -- --save-baseline master`
+
 
 ## Flamegraph
 
